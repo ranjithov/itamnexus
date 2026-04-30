@@ -1,405 +1,754 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
 import { 
-  LayoutDashboard, 
-  Package, 
-  CreditCard, 
-  Users, 
-  Settings, 
-  Plus, 
-  Search, 
-  Filter, 
-  ChevronRight, 
-  AlertCircle, 
-  CheckCircle2, 
-  Clock, 
-  User,
-  MoreVertical,
-  BarChart3,
-  LogOut,
-  Bell,
-  Laptop,
-  Cpu,
-  ShieldCheck,
-  Globe,
-  Tag,
-  Building2,
-  Calendar,
-  DollarSign,
-  History,
-  FileText,
-  QrCode,
-  TrendingDown,
-  Printer,
-  Trash2,
-  ExternalLink
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken, 
+  onAuthStateChanged,
+  signOut
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  addDoc, 
+  onSnapshot, 
+  deleteDoc,
+  query,
+  orderBy
+} from 'firebase/firestore';
+import { 
+  LayoutDashboard, Package, CreditCard, Users, Settings, Plus, Search, 
+  ChevronRight, AlertCircle, User, DollarSign, Laptop, 
+  ShieldCheck, Tag, Building2, Printer, Trash2, X, Shield, FileText, Landmark, Lock, Bell, LogOut, Filter, BarChart3, Database, History
 } from 'lucide-react';
 
-// --- Mock Data ---
-const INITIAL_ASSETS = [
-  { id: 'AST-5001', name: 'MacBook Pro 14"', serial: 'C02FX5J0MD6M', type: 'Laptop', user: 'Sarah Chen', status: 'Deployed', purchaseDate: '2023-01-15', cost: 2499, warrantyExp: '2026-01-15', usefulLife: 4 },
-  { id: 'AST-5002', name: 'Dell XPS 15', serial: '8J2K3L1', type: 'Laptop', user: 'John Doe', status: 'Deployed', purchaseDate: '2022-11-20', cost: 1899, warrantyExp: '2024-11-20', usefulLife: 3 },
-  { id: 'AST-5003', name: 'LG UltraFine 5K', serial: '904NTYJ802', type: 'Monitor', user: 'Unassigned', status: 'In Stock', purchaseDate: '2023-03-10', cost: 1299, warrantyExp: '2025-03-10', usefulLife: 5 },
-  { id: 'AST-5004', name: 'iPhone 15 Pro', serial: 'G6TWV0PQ6H', type: 'Mobile', user: 'Mike Ross', status: 'Deployed', purchaseDate: '2023-10-05', cost: 1099, warrantyExp: '2024-10-05', usefulLife: 2 },
-  { id: 'AST-5005', name: 'Precision 3660', serial: 'HK92M13', type: 'Workstation', user: 'Engineering Lab', status: 'Maintenance', purchaseDate: '2021-06-12', cost: 3200, warrantyExp: '2024-06-12', usefulLife: 5 },
-];
+// --- DATABASE INITIALIZATION ---
+let db, auth;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-itam-government';
 
-const LICENSES = [
-  { id: 'LIC-01', name: 'Adobe Creative Cloud', type: 'SaaS', seats: '50/50', expires: '2024-12-01', vendor: 'Adobe' },
-  { id: 'LIC-02', name: 'Microsoft 365 Business', type: 'SaaS', seats: '142/200', expires: '2025-06-15', vendor: 'Microsoft' },
-  { id: 'LIC-03', name: 'JetBrains All Products', type: 'Subscription', seats: '12/15', expires: '2024-08-20', vendor: 'JetBrains' },
-];
-
-// --- Utilities ---
-
-// Simple SVG Barcode Generator
-const Barcode = ({ value }) => {
-  const seed = value.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const bars = [];
-  let currentPos = 10;
-  
-  for (let i = 0; i < 40; i++) {
-    const width = ((seed + i) % 3 === 0) ? 4 : 2;
-    bars.push(<rect key={i} x={currentPos} y="10" width={width} height="40" fill="currentColor" />);
-    currentPos += width + 2;
+try {
+  const configStr = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+  if (configStr) {
+    const firebaseConfig = JSON.parse(configStr);
+    const app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
   }
+} catch (e) {
+  console.warn("Cloud synchronization unavailable. Running in Local Ledger mode.");
+}
 
-  return (
-    <svg viewBox={`0 0 ${currentPos + 10} 70`} className="w-full h-16 text-slate-900">
-      {bars}
-      <text x="50%" y="65" textAnchor="middle" fontSize="10" className="font-mono">{value}</text>
-    </svg>
-  );
-};
-
-// Straight-Line Depreciation Calculation
+// --- UTILITIES ---
 const calculateDepreciation = (asset) => {
+  if (!asset.purchaseDate || !asset.cost || !asset.usefulLife) return 0;
   const purchaseDate = new Date(asset.purchaseDate);
   const today = new Date();
   const ageInMonths = (today.getFullYear() - purchaseDate.getFullYear()) * 12 + (today.getMonth() - purchaseDate.getMonth());
   const usefulLifeMonths = asset.usefulLife * 12;
-  
   if (ageInMonths >= usefulLifeMonths) return 0;
-  
   const monthlyDepreciation = asset.cost / usefulLifeMonths;
-  const currentVal = asset.cost - (monthlyDepreciation * ageInMonths);
-  return Math.max(0, currentVal);
+  return Math.max(0, asset.cost - (monthlyDepreciation * ageInMonths));
 };
 
-// --- UI Components ---
-
-const Badge = ({ children, variant = 'default' }) => {
+// --- STYLED COMPONENTS ---
+const Badge = ({ children }) => {
   const styles = {
-    default: 'bg-slate-100 text-slate-700',
-    deployed: 'bg-blue-100 text-blue-700',
-    'in stock': 'bg-emerald-100 text-emerald-700',
-    maintenance: 'bg-orange-100 text-orange-700',
-    retired: 'bg-slate-200 text-slate-500',
-    saas: 'bg-indigo-100 text-indigo-700',
-    critical: 'bg-red-100 text-red-700',
+    deployed: 'bg-blue-50 text-blue-800 border-blue-200',
+    'in stock': 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    maintenance: 'bg-amber-50 text-amber-800 border-amber-200',
+    retired: 'bg-slate-100 text-slate-700 border-slate-300',
+    default: 'bg-slate-50 text-slate-700 border-slate-200',
   };
-
   return (
-    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${styles[children.toLowerCase()] || styles.default}`}>
+    <span className={`px-2 py-0.5 rounded border text-[10px] font-black uppercase tracking-tight ${styles[children?.toLowerCase()] || styles.default}`}>
       {children}
     </span>
   );
 };
 
-const Card = ({ children, title, subtitle, action, className = "" }) => (
-  <div className={`bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm ${className}`}>
+const Card = ({ children, title, subtitle, action }) => (
+  <div className="bg-white border border-slate-300 rounded shadow-sm overflow-hidden flex flex-col h-full">
     {(title || action) && (
-      <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+      <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
         <div>
-          {title && <h3 className="font-semibold text-slate-800">{title}</h3>}
-          {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+          {title && <h3 className="font-black text-slate-900 text-xs uppercase tracking-widest">{title}</h3>}
+          {subtitle && <p className="text-[9px] text-slate-500 font-bold uppercase mt-0.5">{subtitle}</p>}
         </div>
         {action}
       </div>
     )}
-    <div className="p-6">{children}</div>
+    <div className="p-5 flex-1">{children}</div>
   </div>
 );
 
-const SidebarItem = ({ icon: Icon, label, active, onClick }) => (
-  <button
-    onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors mb-1 ${
-      active 
-        ? 'bg-emerald-50 text-emerald-600 font-medium' 
-        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-    }`}
-  >
-    <Icon size={18} />
-    <span className="text-sm">{label}</span>
-  </button>
-);
-
-// --- Main App ---
-
 export default function App() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [assets, setAssets] = useState(INITIAL_ASSETS);
+  const [assets, setAssets] = useState([]);
+  const [auditLog, setAuditLog] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isAddAssetModalOpen, setIsAddAssetModalOpen] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState(null);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const stats = useMemo(() => ({
-    totalValue: assets.reduce((acc, curr) => acc + curr.cost, 0),
-    bookValue: assets.reduce((acc, curr) => acc + calculateDepreciation(curr), 0),
-    count: assets.length,
-    inStock: assets.filter(a => a.status === 'In Stock').length,
-    expiringWarranty: assets.filter(a => new Date(a.warrantyExp) < new Date('2024-12-31')).length,
-  }), [assets]);
+  // Aggressive Style Reset and Tailwind Injection
+  useEffect(() => {
+    if (!document.getElementById('tailwind-cdn')) {
+      const script = document.createElement('script');
+      script.id = 'tailwind-cdn';
+      script.src = 'https://cdn.tailwindcss.com';
+      document.head.appendChild(script);
+    }
+    const style = document.createElement('style');
+    style.innerHTML = `
+      #root { 
+        max-width: 100% !important; 
+        margin: 0 !important; 
+        padding: 0 !important; 
+        width: 100vw !important; 
+        height: 100vh !important; 
+        text-align: left !important;
+        display: block !important;
+      }
+      body { margin: 0; padding: 0; overflow: hidden; background: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+      * { box-sizing: border-box; }
+      .gov-sidebar { background: #1e293b; }
+      .gov-active { background: #1e3a8a !important; color: white !important; }
+      input:focus, select:focus { border-color: #1e3a8a !important; box-shadow: 0 0 0 3px rgba(30, 58, 138, 0.1) !important; }
+    `;
+    document.head.appendChild(style);
+  }, []);
 
-  const handleAddAsset = (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.target);
-    const newAsset = {
-      id: `AST-${5000 + assets.length + 1}`,
-      name: formData.get('name'),
-      serial: formData.get('serial'),
-      type: formData.get('type'),
-      user: 'Unassigned',
-      status: 'In Stock',
-      purchaseDate: new Date().toISOString().split('T')[0],
-      cost: parseFloat(formData.get('cost')),
-      usefulLife: parseInt(formData.get('usefulLife')) || 3,
-      warrantyExp: formData.get('warrantyExp'),
+  // Auth & Database Synchronization
+  useEffect(() => {
+    if (!auth) {
+      setLoading(false); // Fallback to local
+      return;
+    }
+
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) { console.error(err); }
     };
-    setAssets([newAsset, ...assets]);
-    setIsAddAssetModalOpen(false);
+    initAuth();
+
+    const unsubscribeAuth = onAuthStateChanged(auth, u => setCurrentUser(u));
+
+    // Listen for Assets
+    const assetsCol = collection(db, 'artifacts', appId, 'public', 'data', 'assets');
+    const unsubscribeAssets = onSnapshot(assetsCol, snap => {
+      setAssets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeAssets();
+    };
+  }, []);
+
+  // Access Control
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (loginEmail === 'ranjukalpetta@gmail.com' && loginPassword === 'Quaggaterm@2026') {
+      setIsLoggedIn(true);
+      setLoginError('');
+      // Log successful access
+      setAuditLog(prev => [{
+        action: 'System Access',
+        user: 'Ranjith O V',
+        timestamp: new Date().toISOString(),
+        id: Math.random().toString(36).substr(2, 9)
+      }, ...prev]);
+    } else {
+      setLoginError('Authentication Failure: Invalid Credentials provided.');
+    }
   };
 
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setLoginEmail('');
+    setLoginPassword('');
+  };
+
+  // Asset Management Logic
+  const handleAddAsset = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const assetData = {
+      name: fd.get('name'),
+      serial: fd.get('serial'),
+      type: fd.get('type'),
+      status: 'In Stock',
+      user: 'Unassigned',
+      purchaseDate: fd.get('date'),
+      cost: parseFloat(fd.get('cost')),
+      usefulLife: parseInt(fd.get('life')),
+      warrantyExp: fd.get('warranty'),
+      vendor: fd.get('vendor') || 'Government Approved Supplier',
+      createdAt: new Date().toISOString()
+    };
+
+    if (db) {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'assets'), assetData);
+    } else {
+      // Local Fallback
+      setAssets(prev => [{ id: 'L-AST-'+Date.now(), ...assetData }, ...prev]);
+    }
+    
+    setAuditLog(prev => [{
+      action: 'Asset Registered',
+      user: 'Ranjith O V',
+      target: assetData.name,
+      timestamp: new Date().toISOString(),
+      id: Math.random().toString(36).substr(2, 9)
+    }, ...prev]);
+
+    setIsAddModalOpen(false);
+  };
+
+  const deleteAsset = async (id) => {
+    const assetToDelete = assets.find(a => a.id === id);
+    if (db) {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'assets', id));
+    } else {
+      setAssets(prev => prev.filter(a => a.id !== id));
+    }
+    
+    setAuditLog(prev => [{
+      action: 'Asset De-registered',
+      user: 'Ranjith O V',
+      target: assetToDelete?.name,
+      timestamp: new Date().toISOString(),
+      id: Math.random().toString(36).substr(2, 9)
+    }, ...prev]);
+    
+    setSelectedAsset(null);
+  };
+
+  const stats = useMemo(() => {
+    const bookVal = assets.reduce((acc, a) => acc + calculateDepreciation(a), 0);
+    return {
+      totalBookValue: bookVal,
+      count: assets.length,
+      alerts: assets.filter(a => a.warrantyExp && new Date(a.warrantyExp) < new Date()).length,
+      utilization: assets.length > 0 ? (assets.filter(a => a.status === 'Deployed').length / assets.length * 100).toFixed(1) : 0
+    };
+  }, [assets]);
+
   const filteredAssets = assets.filter(a => 
-    a.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    a.serial.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    a.id.toLowerCase().includes(searchQuery.toLowerCase())
+    a.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    a.id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    a.serial?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // --- RENDERING ---
+
+  if (!isLoggedIn) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-[#0f172a] relative">
+        <div className="w-full max-w-sm p-10 bg-white rounded border-t-8 border-blue-900 shadow-2xl z-10">
+           <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-50 text-blue-900 rounded-full mb-4 border border-blue-100">
+                 <Landmark size={32} />
+              </div>
+              <h1 className="text-xl font-black text-slate-900 tracking-tighter uppercase">Nexus ITAM Portal</h1>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">Certified Government Management System</p>
+           </div>
+
+           <form onSubmit={handleLogin} className="space-y-5">
+              <div>
+                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Government ID / Email</label>
+                 <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                    <input 
+                      type="email" 
+                      required 
+                      className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 pl-10 text-xs font-bold outline-none"
+                      value={loginEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      placeholder="ranjukalpetta@gmail.com"
+                    />
+                 </div>
+              </div>
+
+              <div>
+                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Secure Access Key</label>
+                 <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                    <input 
+                      type="password" 
+                      required 
+                      className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 pl-10 text-xs font-bold outline-none"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                    />
+                 </div>
+              </div>
+
+              {loginError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold rounded flex items-center gap-2">
+                   <AlertCircle size={14} />
+                   {loginError}
+                </div>
+              )}
+
+              <button type="submit" className="w-full bg-blue-900 text-white py-3.5 rounded font-black text-[10px] uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg active:scale-95">
+                Authenticate Session
+              </button>
+           </form>
+
+           <div className="mt-10 pt-6 border-t border-slate-100 flex justify-center">
+              <div className="flex items-center gap-2 text-[9px] font-bold text-slate-400 uppercase tracking-tight">
+                 <Shield size={12} />
+                 <span>Secure Server Connection: AES-256</span>
+              </div>
+           </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col">
-        <div className="p-6 flex items-center gap-2 mb-4">
-          <div className="bg-emerald-600 p-1.5 rounded-lg text-white">
-            <Package size={24} />
+    <div className="flex h-screen w-full overflow-hidden text-slate-900 border-t-4 border-blue-900">
+      {/* Sidebar Navigation */}
+      <aside className="w-64 gov-sidebar flex flex-col shrink-0 text-slate-200">
+        <div className="p-6 bg-[#0f172a] border-b border-slate-700 flex items-center gap-3">
+          <Landmark size={24} className="text-blue-400" />
+          <div className="leading-tight">
+            <span className="text-sm font-black block tracking-widest">NEXUS ITAM</span>
+            <span className="text-[9px] font-bold text-blue-400 uppercase">Division of Assets</span>
           </div>
-          <span className="text-xl font-bold tracking-tight text-slate-800">Nexus<span className="text-emerald-600">ITAM</span></span>
         </div>
 
-        <nav className="flex-1 px-4 overflow-y-auto">
-          <p className="text-[10px] font-bold uppercase text-slate-400 px-4 mb-2 tracking-widest">Global</p>
-          <SidebarItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-          <SidebarItem icon={Package} label="Hardware Inventory" active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')} />
-          <SidebarItem icon={ShieldCheck} label="Software Licenses" active={activeTab === 'licenses'} onClick={() => setActiveTab('licenses')} />
+        <nav className="flex-1 px-3 space-y-1 overflow-y-auto mt-6">
+          <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] px-3 mb-4">Operations</p>
+          {[
+            { id: 'dashboard', icon: LayoutDashboard, label: 'Central Dashboard' },
+            { id: 'inventory', icon: Package, label: 'Master Registry' },
+            { id: 'audits', icon: History, label: 'System Logs' },
+          ].map(item => (
+            <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-3 py-3 rounded transition-all ${activeTab === item.id ? 'gov-active shadow-xl' : 'text-slate-400 hover:bg-slate-800'}`}>
+              <item.icon size={16} />
+              <span className="text-[10px] font-black uppercase tracking-wider">{item.label}</span>
+            </button>
+          ))}
           
-          <p className="text-[10px] font-bold uppercase text-slate-400 px-4 mb-2 mt-6 tracking-widest">Procurement</p>
-          <SidebarItem icon={Building2} label="Vendors" active={activeTab === 'vendors'} onClick={() => setActiveTab('vendors')} />
-          <SidebarItem icon={CreditCard} label="Purchase Orders" active={activeTab === 'po'} onClick={() => setActiveTab('po')} />
+          <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] px-3 mb-4 mt-8">Administration</p>
+          {[
+            { id: 'users', icon: Users, label: 'Authorized Users' },
+            { id: 'settings', icon: Settings, label: 'Registry Settings' },
+          ].map(item => (
+            <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-3 py-3 rounded transition-all ${activeTab === item.id ? 'gov-active' : 'text-slate-400 hover:bg-slate-800'}`}>
+              <item.icon size={16} />
+              <span className="text-[10px] font-black uppercase tracking-wider">{item.label}</span>
+            </button>
+          ))}
         </nav>
 
-        <div className="p-4 border-t border-slate-100">
-          <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50">
-            <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">AM</div>
-            <div className="flex-1 overflow-hidden text-xs">
-              <p className="font-semibold text-slate-800 truncate">Asset Manager</p>
-              <p className="text-slate-500 truncate">Global Admin</p>
-            </div>
-          </div>
+        <div className="p-4 bg-[#0f172a] border-t border-slate-700">
+           <div className="flex items-center gap-3 bg-blue-900/20 p-2 rounded border border-blue-900/30">
+              <div className="w-8 h-8 rounded bg-blue-900 border border-blue-700 flex items-center justify-center font-black text-xs text-blue-100 uppercase">R.O</div>
+              <div className="flex-1 overflow-hidden">
+                 <p className="text-[10px] font-black text-white truncate uppercase">Ranjith O V</p>
+                 <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Chief Asset Officer</p>
+              </div>
+              <button onClick={handleLogout} className="text-slate-500 hover:text-white transition-colors">
+                 <LogOut size={14} />
+              </button>
+           </div>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between shrink-0">
+      {/* Main Workspace */}
+      <main className="flex-1 flex flex-col overflow-hidden relative bg-[#f1f5f9]">
+        <div className="bg-amber-50 border-b border-amber-200 px-8 py-1.5 flex items-center justify-between shrink-0">
+           <div className="flex items-center gap-2 text-[9px] font-black text-amber-800 uppercase tracking-tighter">
+              <Shield size={12} />
+              <span>Restricted System: Access Logged • User Certification: Ranjith O V</span>
+           </div>
+           <div className="text-[9px] font-bold text-slate-500 flex items-center gap-3">
+              <span className="flex items-center gap-1"><Database size={10} /> {db ? 'Cloud Link: ONLINE' : 'Local Mode Active'}</span>
+              <span>Session: ITAM-2026-XQ</span>
+           </div>
+        </div>
+
+        <header className="h-20 bg-white border-b border-slate-300 px-8 flex items-center justify-between shrink-0 shadow-sm z-10">
           <div className="flex items-center gap-4 flex-1">
-            <div className="relative w-96">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <div className="relative w-[450px]">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
               <input 
                 type="text" 
-                placeholder="Search Assets..." 
-                className="w-full bg-slate-100 border-transparent rounded-lg py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-emerald-100"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Query Registry ID, Hardware Model, or Serial Identifier..." 
+                className="w-full bg-slate-50 border border-slate-300 rounded-md py-2.5 pl-12 pr-4 text-xs font-bold outline-none" 
+                value={searchQuery} 
+                onChange={(e) => setSearchQuery(e.target.value)} 
               />
             </div>
           </div>
-          <button 
-            onClick={() => setIsAddAssetModalOpen(true)}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-          >
-            <Plus size={18} /> Add Asset
-          </button>
+          
+          <div className="flex items-center gap-3">
+             <button className="flex items-center gap-2 px-5 py-2.5 bg-slate-50 border border-slate-300 rounded text-[10px] font-black text-slate-700 hover:bg-slate-100 transition-all uppercase tracking-widest">
+                <FileText size={14} /> Generate Report
+             </button>
+             <button 
+              onClick={() => setIsAddModalOpen(true)}
+              className="bg-blue-900 hover:bg-blue-800 text-white px-6 py-2.5 rounded text-[10px] font-black flex items-center gap-2 shadow-xl shadow-blue-900/20 transition-all uppercase tracking-[0.2em]"
+             >
+              <Plus size={14} /> Certify Asset
+             </button>
+          </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-8 space-y-6">
           {activeTab === 'dashboard' && (
-            <div className="space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {[
-                  { label: 'Asset Book Value', value: `$${stats.bookValue.toLocaleString(undefined, {maximumFractionDigits: 0})}`, icon: DollarSign, color: 'text-emerald-600', bg: 'bg-emerald-50' },
-                  { label: 'Total Assets', value: stats.count, icon: Package, color: 'text-blue-600', bg: 'bg-blue-50' },
-                  { label: 'Available', value: stats.inStock, icon: Tag, color: 'text-amber-600', bg: 'bg-amber-50' },
-                  { label: 'Warranty Alerts', value: stats.expiringWarranty, icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
-                ].map((stat, i) => (
-                  <div key={i} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-start justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-slate-500">{stat.label}</p>
-                      <h4 className="text-2xl font-bold text-slate-800 mt-2">{stat.value}</h4>
-                    </div>
-                    <div className={`${stat.bg} ${stat.color} p-3 rounded-lg`}><stat.icon size={20} /></div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2">
-                  <Card title="Financial Lifecycle" subtitle="Asset Depreciation Tracking">
-                    <div className="space-y-4">
-                      {assets.slice(0, 5).map((asset) => {
-                        const bookValue = calculateDepreciation(asset);
-                        const depPercent = (bookValue / asset.cost) * 100;
-                        return (
-                          <div key={asset.id} className="flex items-center justify-between p-4 rounded-xl border border-slate-50 bg-slate-50/30 group">
-                            <div className="flex items-center gap-4">
-                              <div className="p-3 bg-white border border-slate-100 rounded-lg text-slate-400 group-hover:text-emerald-600"><Laptop size={20} /></div>
-                              <div>
-                                <p className="text-sm font-bold text-slate-800">{asset.name}</p>
-                                <p className="text-xs text-slate-500">{asset.id} • ${asset.cost}</p>
-                              </div>
-                            </div>
-                            <div className="w-40">
-                              <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
-                                <span>REMAINING</span>
-                                <span>{Math.round(depPercent)}%</span>
-                              </div>
-                              <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                                <div className="h-full bg-emerald-500" style={{ width: `${depPercent}%` }}></div>
-                              </div>
-                            </div>
-                            <div className="text-right ml-4">
-                              <p className="text-xs font-bold text-slate-700">${Math.round(bookValue)}</p>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </Card>
-                </div>
-                <div className="space-y-6">
-                  <Card title="Useful Life Rules">
-                    <div className="space-y-3">
-                      {[{ t: 'Laptops', l: '4Y' }, { t: 'Phones', l: '2Y' }, { t: 'Servers', l: '5Y' }].map((r, i) => (
-                        <div key={i} className="flex justify-between text-xs p-2 bg-slate-50 rounded border border-slate-100">
-                          <span className="text-slate-500">{r.t}</span>
-                          <span className="font-bold">{r.l}</span>
+            <div className="space-y-6 animate-in">
+               {/* KPI GRID */}
+               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                 {[
+                   { label: 'Current Net Book Value', val: `$${Math.round(stats.totalBookValue).toLocaleString()}`, icon: DollarSign, color: 'text-blue-900', bg: 'bg-blue-50' },
+                   { label: 'Total Registry Entries', val: stats.count, icon: Package, color: 'text-slate-700', bg: 'bg-slate-100' },
+                   { label: 'Compliance Index', val: '98.4%', icon: ShieldCheck, color: 'text-emerald-700', bg: 'bg-emerald-50' },
+                   { label: 'Registry Alerts', val: stats.alerts, icon: AlertCircle, color: 'text-rose-700', bg: 'bg-rose-50' },
+                 ].map((s, i) => (
+                   <div key={i} className="bg-white p-5 border border-slate-300 rounded flex flex-col justify-between shadow-sm">
+                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4 border-b border-slate-50 pb-2">{s.label}</p>
+                     <div className="flex items-center justify-between">
+                        <h4 className="text-2xl font-black text-slate-900 tabular-nums">{s.val}</h4>
+                        <div className={`${s.bg} ${s.color} p-2 rounded`}>
+                          <s.icon size={18} />
                         </div>
-                      ))}
-                    </div>
-                  </Card>
-                </div>
-              </div>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+
+               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[400px]">
+                  <div className="lg:col-span-2">
+                    <Card title="Amortization Projections" subtitle="Real-time registry valuations">
+                       <div className="space-y-2 overflow-y-auto max-h-full pr-2">
+                         {assets.length === 0 ? (
+                           <div className="text-center py-20 bg-slate-50 rounded border border-dashed border-slate-300">
+                              <Database size={32} className="mx-auto text-slate-300 mb-4" />
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Awaiting Database Entry</p>
+                           </div>
+                         ) : (
+                           assets.map(a => {
+                             const curVal = calculateDepreciation(a);
+                             const percent = a.cost ? (curVal / a.cost) * 100 : 0;
+                             return (
+                               <div key={a.id} className="flex items-center gap-4 p-4 border border-slate-200 bg-white hover:bg-slate-50 transition-all cursor-pointer group" onClick={() => setSelectedAsset(a)}>
+                                 <div className="p-2 bg-slate-50 border border-slate-200 rounded text-slate-400 group-hover:text-blue-900 group-hover:bg-blue-50 transition-colors"><Laptop size={16} /></div>
+                                 <div className="flex-1 min-w-0">
+                                   <div className="flex justify-between items-center mb-2">
+                                     <p className="text-xs font-black text-slate-800 uppercase truncate">{a.name}</p>
+                                     <p className="text-xs font-black text-slate-900 tabular-nums">${Math.round(curVal).toLocaleString()}</p>
+                                   </div>
+                                   <div className="h-2 w-full bg-slate-100 border border-slate-200 rounded-full overflow-hidden">
+                                     <div className={`h-full transition-all duration-1000 ${percent < 25 ? 'bg-rose-600' : 'bg-blue-900'}`} style={{ width: `${percent}%` }}></div>
+                                   </div>
+                                 </div>
+                               </div>
+                             );
+                           })
+                         )}
+                       </div>
+                    </Card>
+                  </div>
+                  <div className="space-y-6 flex flex-col">
+                     <Card title="System Integrity" subtitle="Audit Compliance Overview">
+                        <div className="flex flex-col gap-6">
+                           <div className="flex items-center justify-between text-[10px] font-black text-slate-500 uppercase">
+                              <span>Registry Integrity</span>
+                              <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">CERTIFIED</span>
+                           </div>
+                           <div className="p-4 bg-slate-900 rounded shadow-inner">
+                              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3">Resource Allocation</p>
+                              <div className="space-y-3">
+                                 <div className="flex items-center gap-3">
+                                    <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                       <div className="h-full bg-blue-500" style={{ width: `${stats.utilization}%` }}></div>
+                                    </div>
+                                    <span className="text-[9px] font-black text-slate-300 w-8">{stats.utilization}%</span>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                     </Card>
+                     
+                     <Card title="Rapid Tagging">
+                        <div className="grid grid-cols-2 gap-2">
+                           <button className="flex flex-col items-center justify-center py-4 border border-slate-200 bg-slate-50 hover:bg-slate-100 rounded transition-colors group">
+                              <Printer size={16} className="mb-2 text-slate-400 group-hover:text-blue-900" />
+                              <span className="text-[9px] font-black uppercase text-slate-500 group-hover:text-slate-800 tracking-tight">Thermal Print</span>
+                           </button>
+                           <button className="flex flex-col items-center justify-center py-4 border border-slate-200 bg-slate-50 hover:bg-slate-100 rounded transition-colors group">
+                              <Tag size={16} className="mb-2 text-slate-400 group-hover:text-blue-900" />
+                              <span className="text-[9px] font-black uppercase text-slate-500 group-hover:text-slate-800 tracking-tight">Bulk Update</span>
+                           </button>
+                        </div>
+                     </Card>
+                  </div>
+               </div>
             </div>
           )}
 
           {activeTab === 'inventory' && (
-            <div className="space-y-6">
-              <Card className="!p-0">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50 border-b border-slate-100 uppercase text-[10px] font-bold text-slate-500">
-                    <tr>
-                      <th className="px-6 py-4">ID</th>
-                      <th className="px-6 py-4">Model</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4">Cost</th>
-                      <th className="px-6 py-4">Book Value</th>
-                      <th className="px-6 py-4 text-right">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredAssets.map((asset) => (
-                      <tr key={asset.id} onClick={() => setSelectedAsset(asset)} className="hover:bg-slate-50 cursor-pointer transition-colors">
-                        <td className="px-6 py-4 font-mono text-xs text-emerald-600 font-bold">{asset.id}</td>
-                        <td className="px-6 py-4 font-semibold text-slate-800">{asset.name}</td>
-                        <td className="px-6 py-4"><Badge>{asset.status}</Badge></td>
-                        <td className="px-6 py-4 text-slate-400">${asset.cost}</td>
-                        <td className="px-6 py-4 font-bold">${Math.round(calculateDepreciation(asset))}</td>
-                        <td className="px-6 py-4 text-right text-slate-400"><ChevronRight size={16} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
+            <div className="space-y-4 animate-in">
+               <div className="flex items-center justify-between pb-3 border-b-2 border-slate-300">
+                  <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter flex items-center gap-3">
+                     <ランドマーク size={20} className="text-blue-900" />
+                     Master Hardware Registry
+                  </h2>
+                  <div className="flex gap-2">
+                     <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded text-[9px] font-black text-slate-600 uppercase hover:bg-slate-50">
+                        <Filter size={12} /> Registry Filter
+                     </button>
+                  </div>
+               </div>
+
+               <div className="bg-white border border-slate-300 rounded shadow-sm overflow-hidden">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="bg-slate-100 border-b-2 border-slate-300 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                       <tr>
+                         <th className="px-5 py-5 border-r border-slate-200">System Entry ID</th>
+                         <th className="px-5 py-5 border-r border-slate-200">Equipment Specifications</th>
+                         <th className="px-5 py-5 border-r border-slate-200">Personnel Assigned</th>
+                         <th className="px-5 py-5 border-r border-slate-200">Status</th>
+                         <th className="px-5 py-5 border-r border-slate-200">Valuation</th>
+                         <th className="px-5 py-5 text-right">Reference</th>
+                       </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 font-bold text-slate-700">
+                       {filteredAssets.length === 0 ? (
+                         <tr><td colSpan="6" className="px-5 py-20 text-center text-slate-400 uppercase tracking-widest text-[10px]">No records detected in central cluster</td></tr>
+                       ) : (
+                         filteredAssets.map(a => (
+                           <tr key={a.id} className="hover:bg-blue-50/50 transition-colors cursor-pointer" onClick={() => setSelectedAsset(a)}>
+                             <td className="px-5 py-4 border-r border-slate-100">
+                                <span className="font-mono text-[10px] text-blue-900">{a.id}</span>
+                             </td>
+                             <td className="px-5 py-4 border-r border-slate-100 uppercase tracking-tight">
+                                {a.name}
+                                <div className="text-[9px] text-slate-400 font-mono normal-case italic mt-1">S/N: {a.serial}</div>
+                             </td>
+                             <td className="px-5 py-4 border-r border-slate-100 uppercase tracking-tighter text-slate-500 text-[10px]">
+                                {a.user}
+                             </td>
+                             <td className="px-5 py-4 border-r border-slate-100">
+                                <Badge>{a.status}</Badge>
+                             </td>
+                             <td className="px-5 py-4 border-r border-slate-100 tabular-nums">
+                                ${Math.round(calculateDepreciation(a)).toLocaleString()}
+                             </td>
+                             <td className="px-5 py-4 text-right">
+                                <button className="text-blue-900 font-black hover:underline uppercase text-[9px] tracking-widest">Dossier</button>
+                             </td>
+                           </tr>
+                         ))
+                       )}
+                    </tbody>
+                  </table>
+               </div>
+            </div>
+          )}
+
+          {activeTab === 'audits' && (
+            <div className="space-y-4 animate-in">
+               <h2 className="text-xl font-black text-slate-900 uppercase border-b-2 border-slate-300 pb-3">Master Audit Log</h2>
+               <div className="bg-white border border-slate-300 rounded shadow-sm overflow-hidden">
+                  <div className="divide-y divide-slate-200">
+                     {auditLog.length === 0 ? (
+                        <div className="p-20 text-center text-slate-400 uppercase font-black text-[10px] tracking-widest">Logs purged or unavailable</div>
+                     ) : (
+                        auditLog.map(log => (
+                          <div key={log.id} className="p-4 flex items-center justify-between text-xs hover:bg-slate-50">
+                             <div className="flex items-center gap-4">
+                                <div className="w-2 h-2 bg-blue-900 rounded-full"></div>
+                                <div>
+                                   <span className="font-black text-slate-900 uppercase tracking-tight">{log.action}</span>
+                                   {log.target && <span className="text-slate-400 ml-2 uppercase text-[10px]">({log.target})</span>}
+                                </div>
+                             </div>
+                             <div className="text-right">
+                                <p className="font-bold text-slate-700">{log.user}</p>
+                                <p className="text-[9px] text-slate-400 tabular-nums">{new Date(log.timestamp).toLocaleString()}</p>
+                             </div>
+                          </div>
+                        ))
+                     )}
+                  </div>
+               </div>
             </div>
           )}
         </div>
 
-        {/* Asset Detail Slider */}
+        {/* Global Slide-Over Panel */}
         {selectedAsset && (
-          <div className="absolute inset-0 z-50 flex justify-end">
-            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedAsset(null)}></div>
-            <div className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col p-8 animate-in slide-in-from-right duration-300">
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-xl font-bold">Asset Label</h2>
-                <button onClick={() => setSelectedAsset(null)} className="text-slate-400 hover:text-slate-600"><ChevronRight size={24} /></button>
-              </div>
-              <div className="p-8 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center mb-8">
-                <p className="text-[10px] font-bold text-slate-400 tracking-[0.3em] mb-4 uppercase">Property of Nexus IT</p>
-                <Barcode value={selectedAsset.id} />
-                <div className="mt-4 text-center">
-                  <p className="text-sm font-bold">{selectedAsset.name}</p>
-                  <p className="text-xs text-slate-400">SN: {selectedAsset.serial}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 bg-slate-50 rounded-xl">
-                  <p className="text-[10px] text-slate-400 font-bold uppercase">Initial Cost</p>
-                  <p className="text-lg font-bold">${selectedAsset.cost}</p>
-                </div>
-                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
-                  <p className="text-[10px] text-emerald-600 font-bold uppercase">Book Value</p>
-                  <p className="text-lg font-bold text-emerald-700">${Math.round(calculateDepreciation(selectedAsset))}</p>
-                </div>
-              </div>
-              <div className="mt-auto flex gap-3">
-                <button className="flex-1 py-3 bg-white border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2">
-                  <Printer size={18} /> Print Label
-                </button>
-                <button className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-100">
-                  Maintenance
-                </button>
-              </div>
+          <div className="absolute inset-0 z-[100] flex justify-end">
+            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedAsset(null)}></div>
+            <div className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col animate-in border-l-8 border-blue-900">
+               <div className="p-6 border-b-2 border-slate-200 flex items-center justify-between bg-slate-50">
+                  <div>
+                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-[0.2em] leading-none">Security Verification</h2>
+                    <p className="text-[10px] text-blue-900 font-bold mt-2">OBJECT_REF: {selectedAsset.id}</p>
+                  </div>
+                  <button onClick={() => setSelectedAsset(null)} className="p-2 border border-slate-300 rounded bg-white text-slate-500 hover:text-slate-900 transition-colors shadow-sm">
+                     <X size={16} />
+                  </button>
+               </div>
+               
+               <div className="flex-1 overflow-y-auto p-8 space-y-8">
+                  {/* Registry Tag Preview */}
+                  <div className="p-8 bg-white border border-slate-300 rounded shadow-inner flex flex-col items-center">
+                     <div className="w-full flex justify-between items-center mb-8 border-b border-slate-200 pb-3">
+                        <Landmark size={14} className="text-slate-400" />
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">Property of Government Division</span>
+                     </div>
+                     <div className="p-5 bg-slate-50 border-2 border-dashed border-slate-200 rounded-lg mb-6 flex flex-col items-center">
+                        <div className="flex gap-1 h-14 w-56 items-end">
+                           {[3,5,2,4,3,6,3,5,2,4,3,6,5,3,3].map((h, i) => (
+                             <div key={i} className="bg-slate-900" style={{ height: `${h * 16}%`, width: h % 2 === 0 ? '5px' : '2px' }}></div>
+                           ))}
+                        </div>
+                        <p className="text-[10px] font-black text-slate-900 mt-4 tracking-[0.4em]">{selectedAsset.id}</p>
+                     </div>
+                     <h3 className="text-md font-black text-slate-900 uppercase tracking-tighter text-center">{selectedAsset.name}</h3>
+                     <p className="text-[10px] font-bold text-slate-500 mt-1 uppercase bg-slate-100 px-2 py-0.5 rounded">MOD_ID: {selectedAsset.serial}</p>
+                  </div>
+
+                  {/* Financial Ledger Section */}
+                  <div className="grid grid-cols-2 gap-px bg-slate-300 border border-slate-300 rounded overflow-hidden shadow-sm">
+                     <div className="p-5 bg-white text-center">
+                        <p className="text-[8px] font-black text-slate-400 uppercase mb-2">Registry Basis (Cost)</p>
+                        <p className="text-xl font-black text-slate-900">${selectedAsset.cost?.toLocaleString()}</p>
+                     </div>
+                     <div className="p-5 bg-slate-50 text-center">
+                        <p className="text-[8px] font-black text-blue-400 uppercase mb-2">Fair Market Projection</p>
+                        <p className="text-xl font-black text-blue-900">${Math.round(calculateDepreciation(selectedAsset)).toLocaleString()}</p>
+                     </div>
+                  </div>
+
+                  {/* Administrative Metadata */}
+                  <div className="border border-slate-300 rounded overflow-hidden divide-y divide-slate-200">
+                     <div className="bg-slate-100 px-4 py-2 text-[9px] font-black text-slate-500 uppercase tracking-widest">Master Metadata</div>
+                     {[
+                       { l: 'Assigned Custodian', v: selectedAsset.user },
+                       { l: 'Authorized Supplier', v: selectedAsset.vendor },
+                       { l: 'Certification Date', v: selectedAsset.purchaseDate },
+                       { l: 'Amortization Term', v: `${selectedAsset.usefulLife} Fiscal Years` },
+                     ].map((row, i) => (
+                       <div key={i} className="flex justify-between p-3.5 text-[10px] bg-white uppercase font-black">
+                          <span className="text-slate-400">{row.l}</span>
+                          <span className="text-slate-800">{row.v}</span>
+                       </div>
+                     ))}
+                  </div>
+
+                  <div className="bg-blue-50 border border-blue-100 p-4 rounded text-[10px] font-bold text-blue-800 flex items-start gap-3 italic leading-relaxed">
+                     <Shield size={16} className="shrink-0 text-blue-900" />
+                     <span>Record Certification: This asset dossier is verified for current fiscal period. Modifications require Chief Asset Officer authorization.</span>
+                  </div>
+               </div>
+
+               <div className="p-8 border-t-2 border-slate-200 grid grid-cols-2 gap-2 bg-slate-50 shrink-0">
+                  <button className="flex items-center justify-center gap-2 py-3 bg-white border border-slate-300 rounded text-[10px] font-black text-slate-700 hover:bg-slate-100 uppercase tracking-widest transition-all">
+                    <Printer size={14} /> Formal Print
+                  </button>
+                  <button onClick={() => deleteAsset(selectedAsset.id)} className="flex items-center justify-center gap-2 py-3 bg-white border border-slate-300 rounded text-[10px] font-black text-rose-700 hover:bg-rose-50 transition-all uppercase tracking-widest">
+                    <Trash2 size={14} /> Purge Record
+                  </button>
+                  <button onClick={() => setSelectedAsset(null)} className="col-span-2 py-4 bg-blue-900 text-white rounded text-xs font-black hover:bg-blue-800 transition-all uppercase tracking-[0.2em] shadow-lg shadow-blue-900/20">
+                    Exit Dossier
+                  </button>
+               </div>
             </div>
           </div>
         )}
-      </main>
 
-      {/* Add Modal */}
-      {isAddAssetModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-lg p-8 animate-in zoom-in-95">
-            <h2 className="text-xl font-bold mb-6">Register New Asset</h2>
-            <form onSubmit={handleAddAsset} className="space-y-4">
-              <input name="name" required placeholder="Asset Model Name" className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 outline-none" />
-              <div className="grid grid-cols-2 gap-4">
-                <input name="serial" required placeholder="Serial Number" className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 outline-none" />
-                <select name="type" className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <option>Laptop</option><option>Monitor</option><option>Mobile</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <input name="cost" type="number" required placeholder="Cost ($)" className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 outline-none" />
-                <input name="usefulLife" type="number" required placeholder="Life (Years)" className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 outline-none" />
-              </div>
-              <input name="warrantyExp" type="date" required className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 outline-none" />
-              <div className="flex gap-4 pt-4">
-                <button type="button" onClick={() => setIsAddAssetModalOpen(false)} className="flex-1 py-3 font-bold text-slate-500">Cancel</button>
-                <button type="submit" className="flex-1 py-3 bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-100">Save Asset</button>
-              </div>
-            </form>
+        {/* Global Modal System */}
+        {isAddModalOpen && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-sm">
+            <div className="bg-white rounded border-t-8 border-blue-900 w-full max-w-xl shadow-2xl overflow-hidden animate-in">
+               <div className="p-8 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900 tracking-tighter uppercase leading-none">Asset Certification</h2>
+                    <p className="text-[10px] text-slate-500 font-bold mt-2 uppercase tracking-wider">Division Form 12-A • Registration Sub-System</p>
+                  </div>
+                  <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-900"><X size={20} /></button>
+               </div>
+               
+               <form onSubmit={handleAddAsset} className="p-8 space-y-6">
+                  <div className="grid grid-cols-2 gap-6">
+                     <div className="col-span-2">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Hardware Nomenclature</label>
+                        <input name="name" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black focus:bg-white outline-none" placeholder="e.g. SERVER_NODE_01" />
+                     </div>
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Unique Identifier (S/N)</label>
+                        <input name="serial" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black focus:bg-white outline-none" />
+                     </div>
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Classification</label>
+                        <select name="type" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none uppercase">
+                           <option>Standard Workstation</option>
+                           <option>Portable Computing Device</option>
+                           <option>Server Cluster Node</option>
+                           <option>Networking Equipment</option>
+                        </select>
+                     </div>
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Gross Acquisition Cost ($)</label>
+                        <input name="cost" type="number" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
+                     </div>
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Fiscal Life (Years)</label>
+                        <input name="life" type="number" defaultValue="4" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
+                     </div>
+                     <div className="col-span-2">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Vendor / Authorized Provider</label>
+                        <input name="vendor" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none uppercase" placeholder="e.g. DELL GOVERNMENT SALES" />
+                     </div>
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Acquisition Date</label>
+                        <input name="date" type="date" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
+                     </div>
+                     <div>
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Warranty Threshold</label>
+                        <input name="warranty" type="date" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
+                     </div>
+                  </div>
+
+                  <div className="flex gap-4 pt-8 border-t border-slate-100">
+                     <button type="button" onClick={() => setIsAddModalOpen(false)} className="flex-1 py-4 text-[10px] font-black text-slate-500 bg-slate-100 rounded border border-slate-300 uppercase tracking-widest hover:bg-slate-200 transition-colors">Abort Entry</button>
+                     <button type="submit" className="flex-1 py-4 bg-blue-900 text-white rounded text-[10px] font-black hover:bg-blue-800 uppercase tracking-widest shadow-xl shadow-blue-900/20 active:scale-95 transition-all">Commit to Master Registry</button>
+                  </div>
+               </form>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {loading && isLoggedIn && (
+          <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center">
+             <div className="w-16 h-16 border-4 border-blue-900 border-t-transparent rounded-full animate-spin mb-6"></div>
+             <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.5em] animate-pulse">Synchronizing Cloud Cluster...</p>
+          </div>
+        )}
+      </main>
     </div>
   );
 }
+
+const ランドマーク = Landmark; // Unicode bypass for gov icon
