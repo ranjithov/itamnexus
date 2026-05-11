@@ -1,110 +1,129 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, 
-  signInAnonymously, 
-  signInWithCustomToken, 
-  onAuthStateChanged,
-  signOut
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  doc, 
-  addDoc, 
-  onSnapshot, 
-  deleteDoc,
-  query,
-  orderBy
-} from 'firebase/firestore';
-import { 
-  LayoutDashboard, Package, CreditCard, Users, Settings, Plus, Search, 
+  LayoutDashboard, Package, Users, Settings, Plus, Search, 
   ChevronRight, AlertCircle, User, DollarSign, Laptop, 
-  ShieldCheck, Tag, Building2, Printer, Trash2, X, Shield, FileText, Landmark, Lock, Bell, LogOut, Filter, BarChart3, Database, History
+  ShieldCheck, Tag, Building2, Printer, Trash2, X, Shield, FileText, Landmark, Lock, Bell, LogOut, Filter, History, Database, BarChart3, CheckCircle2, AlertTriangle, HardDrive, CreditCard, TrendingUp, PieChart, Activity, Download, Calendar, ShoppingCart, Briefcase, Coins, Globe
 } from 'lucide-react';
 
-// --- DATABASE INITIALIZATION ---
-let db, auth;
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-itam-government';
+/**
+ * AUTHORIZED PERSONNEL REGISTRY
+ */
+const AUTHORIZED_USERS = [
+  { displayName: "Ranjith O V", username: "ranjukalpetta@gmail.com", password: "Quaggaterm@2026", role: "Chief Asset Officer", initials: "R.O" },
+  { displayName: "Operations Lead", username: "ops@itam.gov", password: "Operations@2026", role: "Registry Supervisor", initials: "O.L" },
+  { displayName: "Regional Auditor", username: "audit@itam.gov", password: "SecureAudit@2026", role: "Compliance Officer", initials: "R.A" }
+];
 
-try {
-  const configStr = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
-  if (configStr) {
-    const firebaseConfig = JSON.parse(configStr);
-    const app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-  }
-} catch (e) {
-  console.warn("Cloud synchronization unavailable. Running in Local Ledger mode.");
-}
+const CURRENCIES = [
+  { code: 'INR', symbol: '₹', label: 'Indian Rupee (INR)', rate: 1 },
+  { code: 'USD', symbol: '$', label: 'US Dollar (USD)', rate: 0.012 },
+  { code: 'EUR', symbol: '€', label: 'Euro (EUR)', rate: 0.011 },
+  { code: 'GBP', symbol: '£', label: 'British Pound (GBP)', rate: 0.0094 },
+  { code: 'JPY', symbol: '¥', label: 'Japanese Yen (JPY)', rate: 1.84 }
+];
 
-// --- UTILITIES ---
+const INITIAL_ASSETS = [
+  { id: 'AST-9001', name: 'Server Node R740', serial: 'SV-78291-X', type: 'Server', user: 'Data Center A', status: 'Deployed', purchaseDate: '2025-01-15', cost: 1000000, currency: 'INR', warrantyExp: '2028-01-15', usefulLife: 5, lastVerified: '2026-04-10' },
+  { id: 'AST-9002', name: 'Workstation Z8 G5', serial: 'WS-11022-P', type: 'Workstation', user: 'Engineering', status: 'In Stock', purchaseDate: '2025-11-20', cost: 350000, currency: 'INR', warrantyExp: '2027-11-20', usefulLife: 4, lastVerified: '2026-03-05' },
+];
+
+/**
+ * AMORTIZATION LOGIC
+ */
 const calculateDepreciation = (asset) => {
-  if (!asset.purchaseDate || !asset.cost || !asset.usefulLife) return 0;
-  const purchaseDate = new Date(asset.purchaseDate);
-  const today = new Date();
-  const ageInMonths = (today.getFullYear() - purchaseDate.getFullYear()) * 12 + (today.getMonth() - purchaseDate.getMonth());
-  const usefulLifeMonths = asset.usefulLife * 12;
-  if (ageInMonths >= usefulLifeMonths) return 0;
-  const monthlyDepreciation = asset.cost / usefulLifeMonths;
-  return Math.max(0, asset.cost - (monthlyDepreciation * ageInMonths));
+  if (!asset || !asset.purchaseDate || !asset.cost || !asset.usefulLife) return 0;
+  try {
+    const purchaseDate = new Date(asset.purchaseDate);
+    if (isNaN(purchaseDate.getTime())) return 0;
+    
+    const today = new Date();
+    const ageInMonths = (today.getFullYear() - purchaseDate.getFullYear()) * 12 + (today.getMonth() - purchaseDate.getMonth());
+    const usefulLifeMonths = (asset.usefulLife || 1) * 12;
+    
+    if (ageInMonths <= 0) return asset.cost;
+    if (ageInMonths >= usefulLifeMonths) return 0;
+    
+    const monthlyDepreciation = asset.cost / usefulLifeMonths;
+    const currentVal = asset.cost - (monthlyDepreciation * ageInMonths);
+    return isNaN(currentVal) ? 0 : Math.max(0, currentVal);
+  } catch (e) {
+    return 0;
+  }
 };
 
-// --- STYLED COMPONENTS ---
+// --- SHARED UI COMPONENTS ---
 const Badge = ({ children }) => {
   const styles = {
-    deployed: 'bg-blue-50 text-blue-800 border-blue-200',
-    'in stock': 'bg-emerald-50 text-emerald-800 border-emerald-200',
-    maintenance: 'bg-amber-50 text-amber-800 border-amber-200',
-    retired: 'bg-slate-100 text-slate-700 border-slate-300',
+    deployed: 'bg-blue-100 text-blue-800 border-blue-200',
+    'in stock': 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    maintenance: 'bg-amber-100 text-amber-800 border-amber-200',
+    retired: 'bg-slate-200 text-slate-700 border-slate-300',
+    pending: 'bg-orange-100 text-orange-800 border-orange-200',
+    approved: 'bg-emerald-100 text-emerald-800 border-emerald-200',
     default: 'bg-slate-50 text-slate-700 border-slate-200',
   };
   return (
-    <span className={`px-2 py-0.5 rounded border text-[10px] font-black uppercase tracking-tight ${styles[children?.toLowerCase()] || styles.default}`}>
+    <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-tight ${styles[String(children).toLowerCase()] || styles.default}`}>
       {children}
     </span>
   );
 };
 
-const Card = ({ children, title, subtitle, action }) => (
-  <div className="bg-white border border-slate-300 rounded shadow-sm overflow-hidden flex flex-col h-full">
-    {(title || action) && (
-      <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
-        <div>
-          {title && <h3 className="font-black text-slate-900 text-xs uppercase tracking-widest">{title}</h3>}
-          {subtitle && <p className="text-[9px] text-slate-500 font-bold uppercase mt-0.5">{subtitle}</p>}
+const Card = ({ children, title, icon: Icon, subtitle, action }) => {
+  const IconComp = Icon || Shield;
+  return (
+    <div className="bg-white border border-slate-300 rounded-lg shadow-sm flex flex-col overflow-hidden transition-all hover:shadow-md text-left">
+      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-white rounded-md border border-slate-200 text-blue-900">
+            <IconComp size={16} />
+          </div>
+          <div className="text-left leading-none">
+            <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest">{title}</h3>
+            {subtitle && <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">{subtitle}</p>}
+          </div>
         </div>
         {action}
       </div>
-    )}
-    <div className="p-5 flex-1">{children}</div>
-  </div>
-);
+      <div className="p-5 flex-1">{children}</div>
+    </div>
+  );
+};
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   
   const [activeTab, setActiveTab] = useState('dashboard');
   const [assets, setAssets] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [isPOModalOpen, setIsPOModalOpen] = useState(false);
+  
+  // Global Currency State
+  const [sysCurrency, setSysCurrency] = useState(CURRENCIES[0]); // Default INR
+  
+  const [isSystemReady, setIsSystemReady] = useState(false);
+  const [isLocalMode, setIsLocalMode] = useState(false);
+  const [systemError, setSystemError] = useState(null);
+  const [fbRefs, setFbRefs] = useState({ auth: null, db: null });
 
-  // Aggressive Style Reset and Tailwind Injection
+  // Report Dates State
+  const [reportDates, setReportDates] = useState({
+    start: new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0],
+    end: new Date().toISOString().split('T')[0]
+  });
+
+  /**
+   * 1. SYSTEM INITIALIZATION
+   */
   useEffect(() => {
-    if (!document.getElementById('tailwind-cdn')) {
-      const script = document.createElement('script');
-      script.id = 'tailwind-cdn';
-      script.src = 'https://cdn.tailwindcss.com';
-      document.head.appendChild(script);
-    }
     const style = document.createElement('style');
     style.innerHTML = `
       #root { 
@@ -115,74 +134,255 @@ export default function App() {
         height: 100vh !important; 
         text-align: left !important;
         display: block !important;
+        font-family: system-ui, -apple-system, sans-serif !important;
       }
-      body { margin: 0; padding: 0; overflow: hidden; background: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+      body { margin: 0; padding: 0; overflow: hidden; background: #f8fafc; }
       * { box-sizing: border-box; }
-      .gov-sidebar { background: #1e293b; }
-      .gov-active { background: #1e3a8a !important; color: white !important; }
-      input:focus, select:focus { border-color: #1e3a8a !important; box-shadow: 0 0 0 3px rgba(30, 58, 138, 0.1) !important; }
+      .gov-sidebar { background: #020617; }
+      .gov-active { background: #1e3a8a !important; color: white !important; border-left: 4px solid #60a5fa !important; }
+      .animate-in { animation: fadeIn 0.2s ease-out; }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+      .tabular-nums { font-variant-numeric: tabular-nums; }
     `;
     document.head.appendChild(style);
-  }, []);
 
-  // Auth & Database Synchronization
-  useEffect(() => {
-    if (!auth) {
-      setLoading(false); // Fallback to local
-      return;
-    }
-
-    const initAuth = async () => {
+    const loadCore = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
+        const scriptUrls = [
+          'https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js',
+          'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js',
+          'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js' 
+        ];
+
+        for (const url of scriptUrls) {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = url;
+            script.async = true;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`Failed to load ${url}`));
+            document.head.appendChild(script);
+          });
         }
-      } catch (err) { console.error(err); }
+
+        if (!window.firebase) throw new Error("Cloud SDK failed to initialize.");
+
+        const configStr = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+        if (!configStr) {
+          setIsLocalMode(true);
+          setAssets(INITIAL_ASSETS);
+          setIsSystemReady(true);
+          return;
+        }
+
+        const config = JSON.parse(configStr);
+        const app = window.firebase.initializeApp(config);
+        const auth = app.auth();
+        const db = app.firestore();
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-itam-pro-v2';
+
+        setFbRefs({ auth, db });
+
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await auth.signInWithCustomToken(__initial_auth_token);
+        } else {
+          await auth.signInAnonymously();
+        }
+
+        db.collection(`/artifacts/${appId}/public/data/assets`).onSnapshot((snap) => {
+          const docs = [];
+          snap.forEach(d => docs.push({ id: d.id, ...d.data() }));
+          setAssets(docs.length ? docs : INITIAL_ASSETS);
+        });
+
+        db.collection(`/artifacts/${appId}/public/data/purchase_orders`).onSnapshot((snap) => {
+          const docs = [];
+          snap.forEach(d => docs.push({ id: d.id, ...d.data() }));
+          setPurchaseOrders(docs);
+          setIsSystemReady(true);
+        }, (err) => {
+          setIsLocalMode(true);
+          setAssets(INITIAL_ASSETS);
+          setIsSystemReady(true);
+        });
+
+      } catch (err) {
+        setIsLocalMode(true);
+        setAssets(INITIAL_ASSETS);
+        setIsSystemReady(true);
+      }
     };
-    initAuth();
 
-    const unsubscribeAuth = onAuthStateChanged(auth, u => setCurrentUser(u));
-
-    // Listen for Assets
-    const assetsCol = collection(db, 'artifacts', appId, 'public', 'data', 'assets');
-    const unsubscribeAssets = onSnapshot(assetsCol, snap => {
-      setAssets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    });
-
-    return () => {
-      unsubscribeAuth();
-      unsubscribeAssets();
-    };
+    loadCore();
   }, []);
 
-  // Access Control
   const handleLogin = (e) => {
     e.preventDefault();
-    if (loginEmail === 'ranjukalpetta@gmail.com' && loginPassword === 'Quaggaterm@2026') {
+    const authorized = AUTHORIZED_USERS.find(
+      u => u.username.toLowerCase() === loginEmail.toLowerCase() && u.password === loginPassword
+    );
+
+    if (authorized) {
       setIsLoggedIn(true);
+      setCurrentUser(authorized);
       setLoginError('');
-      // Log successful access
       setAuditLog(prev => [{
-        action: 'System Access',
-        user: 'Ranjith O V',
+        action: 'System Access Granted',
+        user: authorized.displayName,
         timestamp: new Date().toISOString(),
-        id: Math.random().toString(36).substr(2, 9)
+        id: Date.now()
       }, ...prev]);
     } else {
-      setLoginError('Authentication Failure: Invalid Credentials provided.');
+      setLoginError('Invalid Identification: Access Restricted.');
     }
   };
 
-  const handleLogout = () => {
-    setIsLoggedIn(false);
-    setLoginEmail('');
-    setLoginPassword('');
+  /**
+   * PURCHASE ORDER ENGINE
+   */
+  const handleCreatePO = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const currencyCode = fd.get('currency');
+    const currency = CURRENCIES.find(c => c.code === currencyCode);
+    
+    const poData = {
+      poNumber: `PO-${Date.now().toString().slice(-6)}`,
+      item: fd.get('item'),
+      quantity: parseInt(fd.get('qty')),
+      unitPrice: parseFloat(fd.get('price')),
+      vendor: fd.get('vendor'),
+      currency: currencyCode,
+      symbol: currency.symbol,
+      status: 'Pending Approval',
+      requestor: currentUser?.displayName,
+      date: new Date().toISOString().split('T')[0],
+      total: parseInt(fd.get('qty')) * parseFloat(fd.get('price'))
+    };
+
+    if (!isLocalMode && fbRefs.db) {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-itam-pro-v2';
+      try {
+        await fbRefs.db.collection(`/artifacts/${appId}/public/data/purchase_orders`).add(poData);
+      } catch (err) {
+        setPurchaseOrders(prev => [poData, ...prev]);
+      }
+    } else {
+      setPurchaseOrders(prev => [poData, ...prev]);
+    }
+
+    setAuditLog(prev => [{
+      action: 'PO Requisition Created',
+      user: currentUser?.displayName,
+      target: poData.poNumber,
+      timestamp: new Date().toISOString(),
+      id: Date.now()
+    }, ...prev]);
+
+    setIsPOModalOpen(false);
   };
 
-  // Asset Management Logic
+  const handleDownloadPOPDF = (po) => {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const margin = 20;
+
+    doc.setFillColor(2, 6, 23); 
+    doc.rect(0, 0, 210, 40, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(22);
+    doc.setFont('helvetica', 'bold');
+    doc.text('GOVERNMENT OF NEXUS', margin, 25);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text('CENTRAL IT ASSET MANAGEMENT BUREAU', margin, 32);
+
+    doc.setTextColor(2, 6, 23);
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PURCHASE REQUISITION', margin, 55);
+    
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`PO NUMBER:`, 140, 55);
+    doc.setFont('helvetica', 'normal');
+    doc.text(po.poNumber, 170, 55);
+    
+    doc.setFont('helvetica', 'bold');
+    doc.text(`DATE:`, 140, 62);
+    doc.setFont('helvetica', 'normal');
+    doc.text(po.date, 170, 62);
+
+    doc.setDrawColor(200, 200, 200);
+    doc.line(margin, 75, 190, 75);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('VENDOR INFORMATION', margin, 85);
+    doc.setFont('helvetica', 'normal');
+    doc.text(po.vendor, margin, 92);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('REQUESTOR', 120, 85);
+    doc.setFont('helvetica', 'normal');
+    doc.text(po.requestor, 120, 92);
+
+    doc.setFillColor(241, 245, 249);
+    doc.rect(margin, 110, 170, 10, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.text('DESCRIPTION', margin + 5, 117);
+    doc.text('QTY', 110, 117);
+    doc.text('UNIT COST', 140, 117);
+    doc.text('TOTAL', 170, 117);
+
+    doc.setFont('helvetica', 'normal');
+    doc.text(po.item, margin + 5, 130);
+    doc.text(po.quantity.toString(), 110, 130);
+    doc.text(`${po.symbol}${po.unitPrice.toLocaleString()}`, 140, 130);
+    doc.text(`${po.symbol}${po.total.toLocaleString()}`, 170, 130);
+
+    doc.line(margin, 140, 190, 140);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('GRAND TOTAL:', 120, 155);
+    doc.text(`${po.symbol}${po.total.toLocaleString()} ${po.currency}`, 160, 155);
+
+    doc.save(`${po.poNumber}_REQUISITION.pdf`);
+  };
+
+  const handleGenerateReport = () => {
+    const start = new Date(reportDates.start);
+    const end = new Date(reportDates.end);
+    const targetAssets = assets.filter(a => {
+      const pDate = new Date(a.purchaseDate);
+      return pDate >= start && pDate <= end;
+    });
+
+    if (targetAssets.length === 0) return;
+
+    const headers = ["Node ID", "Nomenclature", "Serial", "Classification", "Purchase Date", "Currency", "Original Basis", "Book Value"];
+    const rows = targetAssets.map(a => [
+      a.id, `"${a.name}"`, a.serial, a.type, a.purchaseDate, a.currency || 'INR', a.cost, Math.round(calculateDepreciation(a))
+    ]);
+
+    const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.setAttribute("href", URL.createObjectURL(blob));
+    link.setAttribute("download", `ITAM_FISCAL_REPORT_${reportDates.start}_TO_${reportDates.end}.csv`);
+    link.click();
+  };
+
+  const handleVerifyAsset = async (asset) => {
+    if (!isLocalMode && fbRefs.db) {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-itam-pro-v2';
+      await fbRefs.db.doc(`/artifacts/${appId}/public/data/assets/${asset.id}`).update({ lastVerified: new Date().toISOString().split('T')[0] });
+    } else {
+      setAssets(prev => prev.map(a => a.id === asset.id ? { ...a, lastVerified: new Date().toISOString().split('T')[0] } : a));
+    }
+    setSelectedAsset(null);
+  };
+
   const handleAddAsset = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -192,312 +392,235 @@ export default function App() {
       type: fd.get('type'),
       status: 'In Stock',
       user: 'Unassigned',
+      currency: fd.get('currency'),
       purchaseDate: fd.get('date'),
-      cost: parseFloat(fd.get('cost')),
-      usefulLife: parseInt(fd.get('life')),
-      warrantyExp: fd.get('warranty'),
-      vendor: fd.get('vendor') || 'Government Approved Supplier',
-      createdAt: new Date().toISOString()
+      cost: parseFloat(fd.get('cost')) || 0,
+      usefulLife: parseInt(fd.get('life')) || 4,
+      createdAt: new Date().toISOString(),
+      officer: currentUser?.displayName,
+      lastVerified: new Date().toISOString().split('T')[0]
     };
 
-    if (db) {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'assets'), assetData);
+    if (!isLocalMode && fbRefs.db) {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-itam-pro-v2';
+      try {
+        await fbRefs.db.collection(`/artifacts/${appId}/public/data/assets`).add(assetData);
+        setIsAddModalOpen(false);
+      } catch (err) {
+        setAssets(prev => [{ id: 'L-' + Date.now(), ...assetData }, ...prev]);
+        setIsAddModalOpen(false);
+      }
     } else {
-      // Local Fallback
-      setAssets(prev => [{ id: 'L-AST-'+Date.now(), ...assetData }, ...prev]);
+      setAssets(prev => [{ id: 'L-' + Date.now(), ...assetData }, ...prev]);
+      setIsAddModalOpen(false);
     }
-    
-    setAuditLog(prev => [{
-      action: 'Asset Registered',
-      user: 'Ranjith O V',
-      target: assetData.name,
-      timestamp: new Date().toISOString(),
-      id: Math.random().toString(36).substr(2, 9)
-    }, ...prev]);
-
-    setIsAddModalOpen(false);
   };
 
   const deleteAsset = async (id) => {
-    const assetToDelete = assets.find(a => a.id === id);
-    if (db) {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'assets', id));
+    if (!isLocalMode && fbRefs.db) {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-itam-pro-v2';
+      try {
+        await fbRefs.db.doc(`/artifacts/${appId}/public/data/assets/${id}`).delete();
+      } catch (err) {
+        setAssets(prev => prev.filter(a => a.id !== id));
+      }
     } else {
       setAssets(prev => prev.filter(a => a.id !== id));
     }
-    
-    setAuditLog(prev => [{
-      action: 'Asset De-registered',
-      user: 'Ranjith O V',
-      target: assetToDelete?.name,
-      timestamp: new Date().toISOString(),
-      id: Math.random().toString(36).substr(2, 9)
-    }, ...prev]);
-    
     setSelectedAsset(null);
   };
 
   const stats = useMemo(() => {
-    const bookVal = assets.reduce((acc, a) => acc + calculateDepreciation(a), 0);
-    return {
-      totalBookValue: bookVal,
-      count: assets.length,
-      alerts: assets.filter(a => a.warrantyExp && new Date(a.warrantyExp) < new Date()).length,
-      utilization: assets.length > 0 ? (assets.filter(a => a.status === 'Deployed').length / assets.length * 100).toFixed(1) : 0
-    };
-  }, [assets]);
+    // Total Value always displayed in Global Selected Currency
+    const totalVal = assets.reduce((acc, a) => {
+      const depValue = calculateDepreciation(a);
+      // Basic normalization logic for dashboard aggregation
+      const assetCurrency = CURRENCIES.find(c => c.code === (a.currency || 'INR'));
+      const valueInINR = depValue / (assetCurrency?.rate || 1);
+      return acc + (valueInINR * sysCurrency.rate);
+    }, 0);
+
+    const count = assets.length;
+    const expired = assets.filter(a => a.warrantyExp && new Date(a.warrantyExp) < new Date()).length;
+    const critical = assets.filter(a => a.cost > 0 && (calculateDepreciation(a) / a.cost) < 0.2).length;
+    return { totalVal, count, expired, critical };
+  }, [assets, sysCurrency]);
 
   const filteredAssets = assets.filter(a => 
-    a.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    a.id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    a.serial?.toLowerCase().includes(searchQuery.toLowerCase())
+    String(a.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+    String(a.serial || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // --- RENDERING ---
-
+  // --- RENDER: LOGIN ---
   if (!isLoggedIn) {
     return (
-      <div className="h-screen w-full flex items-center justify-center bg-[#0f172a] relative">
-        <div className="w-full max-w-sm p-10 bg-white rounded border-t-8 border-blue-900 shadow-2xl z-10">
-           <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-50 text-blue-900 rounded-full mb-4 border border-blue-100">
-                 <Landmark size={32} />
-              </div>
-              <h1 className="text-xl font-black text-slate-900 tracking-tighter uppercase">Nexus ITAM Portal</h1>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">Certified Government Management System</p>
-           </div>
-
-           <form onSubmit={handleLogin} className="space-y-5">
-              <div>
-                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Government ID / Email</label>
-                 <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                    <input 
-                      type="email" 
-                      required 
-                      className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 pl-10 text-xs font-bold outline-none"
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      placeholder="ranjukalpetta@gmail.com"
-                    />
-                 </div>
-              </div>
-
-              <div>
-                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Secure Access Key</label>
-                 <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                    <input 
-                      type="password" 
-                      required 
-                      className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 pl-10 text-xs font-bold outline-none"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="••••••••"
-                    />
-                 </div>
-              </div>
-
-              {loginError && (
-                <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold rounded flex items-center gap-2">
-                   <AlertCircle size={14} />
-                   {loginError}
-                </div>
-              )}
-
-              <button type="submit" className="w-full bg-blue-900 text-white py-3.5 rounded font-black text-[10px] uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg active:scale-95">
-                Authenticate Session
-              </button>
-           </form>
-
-           <div className="mt-10 pt-6 border-t border-slate-100 flex justify-center">
-              <div className="flex items-center gap-2 text-[9px] font-bold text-slate-400 uppercase tracking-tight">
-                 <Shield size={12} />
-                 <span>Secure Server Connection: AES-256</span>
-              </div>
-           </div>
+      <div className="h-screen w-full flex items-center justify-center bg-[#020617]">
+        <div className="w-full max-w-sm p-10 bg-white rounded-xl shadow-2xl z-10 text-left animate-in border-b-[12px] border-blue-900">
+          <div className="text-center mb-10">
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-slate-900 text-blue-400 rounded-2xl mb-6 shadow-xl border border-slate-700">
+              <ShieldCheck size={40} />
+            </div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">Nexus ITAM</h1>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-3">Government Asset Command</p>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div className="space-y-2 text-left">
+              <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Official ID</label>
+              <input type="email" required className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3.5 text-sm font-bold outline-none focus:border-blue-900" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} />
+            </div>
+            <div className="space-y-2 text-left">
+              <label className="text-[10px] font-black text-slate-500 uppercase mb-2 ml-1">Secure Key</label>
+              <input type="password" required className="w-full bg-slate-50 border border-slate-300 rounded-lg px-4 py-3.5 text-sm font-bold outline-none focus:border-blue-900" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} />
+            </div>
+            {loginError && <div className="p-3 bg-rose-50 text-rose-600 text-[10px] font-black rounded-lg uppercase flex items-center gap-2 animate-pulse"><AlertCircle size={14}/> {loginError}</div>}
+            <button type="submit" className="w-full bg-blue-900 text-white py-4 rounded-lg font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg active:scale-95 shadow-blue-900/30">Authorize Access</button>
+          </form>
         </div>
       </div>
     );
   }
 
+  // --- RENDER: MAIN ---
   return (
-    <div className="flex h-screen w-full overflow-hidden text-slate-900 border-t-4 border-blue-900">
-      {/* Sidebar Navigation */}
-      <aside className="w-64 gov-sidebar flex flex-col shrink-0 text-slate-200">
-        <div className="p-6 bg-[#0f172a] border-b border-slate-700 flex items-center gap-3">
-          <Landmark size={24} className="text-blue-400" />
+    <div className="flex h-screen w-full overflow-hidden text-slate-900">
+      <aside className="w-72 gov-sidebar flex flex-col shrink-0 text-slate-300">
+        <div className="p-8 flex items-center gap-4 bg-[#010413]">
+          <Landmark size={28} className="text-blue-500" />
           <div className="leading-tight">
-            <span className="text-sm font-black block tracking-widest">NEXUS ITAM</span>
-            <span className="text-[9px] font-bold text-blue-400 uppercase">Division of Assets</span>
+            <span className="text-lg font-black block tracking-tighter text-white">NEXUS PRO</span>
+            <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">Asset Bureau</span>
           </div>
         </div>
-
-        <nav className="flex-1 px-3 space-y-1 overflow-y-auto mt-6">
-          <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] px-3 mb-4">Operations</p>
+        <nav className="flex-1 px-4 space-y-2 overflow-y-auto mt-8 text-left">
+          <p className="text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] px-4 mb-4">Core Modules</p>
           {[
-            { id: 'dashboard', icon: LayoutDashboard, label: 'Central Dashboard' },
+            { id: 'dashboard', icon: LayoutDashboard, label: 'Central Command' },
             { id: 'inventory', icon: Package, label: 'Master Registry' },
-            { id: 'audits', icon: History, label: 'System Logs' },
+            { id: 'audits', icon: History, label: 'System Audit' },
           ].map(item => (
-            <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-3 py-3 rounded transition-all ${activeTab === item.id ? 'gov-active shadow-xl' : 'text-slate-400 hover:bg-slate-800'}`}>
-              <item.icon size={16} />
-              <span className="text-[10px] font-black uppercase tracking-wider">{item.label}</span>
+            <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all font-bold text-xs uppercase tracking-tight ${activeTab === item.id ? 'gov-active shadow-xl' : 'hover:bg-slate-800/50 hover:text-white text-slate-500'}`}>
+              <item.icon size={18} /> {item.label}
             </button>
           ))}
-          
-          <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] px-3 mb-4 mt-8">Administration</p>
+          <p className="text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] px-4 mb-4 mt-10">Administrative</p>
           {[
-            { id: 'users', icon: Users, label: 'Authorized Users' },
-            { id: 'settings', icon: Settings, label: 'Registry Settings' },
+            { id: 'procurement', icon: CreditCard, label: 'Procurement' },
+            { id: 'reports', icon: BarChart3, label: 'Fiscal Reports' },
           ].map(item => (
-            <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-3 py-3 rounded transition-all ${activeTab === item.id ? 'gov-active' : 'text-slate-400 hover:bg-slate-800'}`}>
-              <item.icon size={16} />
-              <span className="text-[10px] font-black uppercase tracking-wider">{item.label}</span>
+            <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all font-bold text-xs uppercase tracking-tight ${activeTab === item.id ? 'gov-active' : 'hover:bg-slate-800/50 hover:text-white text-slate-500'}`}>
+              <item.icon size={18} /> {item.label}
             </button>
           ))}
         </nav>
-
-        <div className="p-4 bg-[#0f172a] border-t border-slate-700">
-           <div className="flex items-center gap-3 bg-blue-900/20 p-2 rounded border border-blue-900/30">
-              <div className="w-8 h-8 rounded bg-blue-900 border border-blue-700 flex items-center justify-center font-black text-xs text-blue-100 uppercase">R.O</div>
-              <div className="flex-1 overflow-hidden">
-                 <p className="text-[10px] font-black text-white truncate uppercase">Ranjith O V</p>
-                 <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Chief Asset Officer</p>
+        <div className="p-6 bg-[#010413] border-t border-slate-800 text-left">
+           <div className="flex items-center gap-4 bg-slate-900/50 p-3 rounded-xl border border-slate-800">
+              <div className="w-10 h-10 rounded-lg bg-blue-900 flex items-center justify-center font-black text-sm text-blue-100 uppercase">{currentUser?.initials || 'U'}</div>
+              <div className="flex-1 min-w-0 text-left">
+                 <p className="text-xs font-black text-white truncate">{currentUser?.displayName}</p>
+                 <p className="text-[9px] text-blue-500 font-bold uppercase tracking-tighter">{currentUser?.role}</p>
               </div>
-              <button onClick={handleLogout} className="text-slate-500 hover:text-white transition-colors">
-                 <LogOut size={14} />
-              </button>
+              <button onClick={() => setIsLoggedIn(false)} className="text-slate-500 hover:text-rose-500 transition-colors"><LogOut size={16}/></button>
            </div>
         </div>
       </aside>
 
-      {/* Main Workspace */}
-      <main className="flex-1 flex flex-col overflow-hidden relative bg-[#f1f5f9]">
-        <div className="bg-amber-50 border-b border-amber-200 px-8 py-1.5 flex items-center justify-between shrink-0">
-           <div className="flex items-center gap-2 text-[9px] font-black text-amber-800 uppercase tracking-tighter">
-              <Shield size={12} />
-              <span>Restricted System: Access Logged • User Certification: Ranjith O V</span>
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        <div className={`px-8 py-2 flex items-center justify-between border-b text-[10px] font-black uppercase tracking-widest ${isLocalMode ? 'bg-amber-500 text-white' : 'bg-blue-900 text-white'}`}>
+           <div className="flex items-center gap-3">
+              <Shield size={14} />
+              <span>Verified Session Active • Global Currency: {sysCurrency.code}</span>
            </div>
-           <div className="text-[9px] font-bold text-slate-500 flex items-center gap-3">
-              <span className="flex items-center gap-1"><Database size={10} /> {db ? 'Cloud Link: ONLINE' : 'Local Mode Active'}</span>
-              <span>Session: ITAM-2026-XQ</span>
+           <div className="flex items-center gap-4 font-mono">
+              <Database size={12}/> DB_PRO_NODE_SECURE
            </div>
         </div>
 
-        <header className="h-20 bg-white border-b border-slate-300 px-8 flex items-center justify-between shrink-0 shadow-sm z-10">
-          <div className="flex items-center gap-4 flex-1">
-            <div className="relative w-[450px]">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-              <input 
-                type="text" 
-                placeholder="Query Registry ID, Hardware Model, or Serial Identifier..." 
-                className="w-full bg-slate-50 border border-slate-300 rounded-md py-2.5 pl-12 pr-4 text-xs font-bold outline-none" 
-                value={searchQuery} 
-                onChange={(e) => setSearchQuery(e.target.value)} 
-              />
+        <header className="h-24 bg-white border-b border-slate-200 px-8 flex items-center justify-between shadow-sm z-10 shrink-0">
+          <div className="flex items-center gap-6">
+            <div className="relative group text-left">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <input type="text" placeholder="Query Master DB..." className="w-[400px] bg-slate-100 border-none rounded-xl py-3 pl-12 pr-4 text-xs font-bold outline-none focus:ring-4 focus:ring-blue-900/5 focus:bg-white transition-all" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+            </div>
+            
+            {/* Global Currency Switcher */}
+            <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 p-1.5 rounded-xl">
+               <Globe size={14} className="text-slate-400 ml-2" />
+               <select 
+                className="bg-transparent border-none text-[10px] font-black uppercase outline-none focus:ring-0 cursor-pointer pr-4"
+                value={sysCurrency.code}
+                onChange={(e) => setSysCurrency(CURRENCIES.find(c => c.code === e.target.value))}
+               >
+                 {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
+               </select>
             </div>
           </div>
-          
-          <div className="flex items-center gap-3">
-             <button className="flex items-center gap-2 px-5 py-2.5 bg-slate-50 border border-slate-300 rounded text-[10px] font-black text-slate-700 hover:bg-slate-100 transition-all uppercase tracking-widest">
-                <FileText size={14} /> Generate Report
-             </button>
-             <button 
-              onClick={() => setIsAddModalOpen(true)}
-              className="bg-blue-900 hover:bg-blue-800 text-white px-6 py-2.5 rounded text-[10px] font-black flex items-center gap-2 shadow-xl shadow-blue-900/20 transition-all uppercase tracking-[0.2em]"
-             >
-              <Plus size={14} /> Certify Asset
-             </button>
+          <div className="flex items-center gap-4">
+             <button onClick={() => setIsAddModalOpen(true)} className="bg-blue-900 hover:bg-blue-800 text-white px-8 py-3.5 rounded-xl text-xs font-black flex items-center gap-3 shadow-xl active:scale-95 transition-all uppercase tracking-widest leading-none"><Plus size={18}/> Certify Asset</button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8 space-y-6">
+        <div className="flex-1 overflow-y-auto p-10 space-y-10 animate-in">
           {activeTab === 'dashboard' && (
-            <div className="space-y-6 animate-in">
-               {/* KPI GRID */}
-               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                 {[
-                   { label: 'Current Net Book Value', val: `$${Math.round(stats.totalBookValue).toLocaleString()}`, icon: DollarSign, color: 'text-blue-900', bg: 'bg-blue-50' },
-                   { label: 'Total Registry Entries', val: stats.count, icon: Package, color: 'text-slate-700', bg: 'bg-slate-100' },
-                   { label: 'Compliance Index', val: '98.4%', icon: ShieldCheck, color: 'text-emerald-700', bg: 'bg-emerald-50' },
-                   { label: 'Registry Alerts', val: stats.alerts, icon: AlertCircle, color: 'text-rose-700', bg: 'bg-rose-50' },
-                 ].map((s, i) => (
-                   <div key={i} className="bg-white p-5 border border-slate-300 rounded flex flex-col justify-between shadow-sm">
-                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4 border-b border-slate-50 pb-2">{s.label}</p>
-                     <div className="flex items-center justify-between">
-                        <h4 className="text-2xl font-black text-slate-900 tabular-nums">{s.val}</h4>
-                        <div className={`${s.bg} ${s.color} p-2 rounded`}>
-                          <s.icon size={18} />
-                        </div>
-                     </div>
-                   </div>
-                 ))}
+            <div className="space-y-10">
+               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 text-left">
+                  {[
+                    { label: `Registry Value (${sysCurrency.code})`, v: `${sysCurrency.symbol}${Math.round(stats.totalVal || 0).toLocaleString()}`, icon: Coins, color: 'text-blue-600', bg: 'bg-blue-500/10' },
+                    { label: 'Hardware Nodes', v: stats.count || 0, icon: Package, color: 'text-indigo-600', bg: 'bg-indigo-500/10' },
+                    { label: 'Security Alerts', v: stats.expired || 0, icon: AlertTriangle, color: 'text-rose-600', bg: 'bg-rose-500/10' },
+                    { label: 'Lifecycle Critical', v: stats.critical || 0, icon: HardDrive, color: 'text-amber-600', bg: 'bg-amber-500/10' },
+                  ].map((s, i) => (
+                    <div key={i} className="bg-white p-7 border border-slate-200 rounded-2xl flex flex-col justify-between shadow-sm group hover:border-blue-300 transition-all text-left">
+                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6 leading-none border-b border-slate-50 pb-4">{s.label}</p>
+                       <div className="flex items-center justify-between">
+                          <h4 className="text-2xl font-black text-slate-900 tabular-nums leading-none">{s.v}</h4>
+                          <div className={`${s.bg} ${s.color} p-3 rounded-xl`}><s.icon size={24} /></div>
+                       </div>
+                    </div>
+                  ))}
                </div>
-
-               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[400px]">
+               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 text-left">
                   <div className="lg:col-span-2">
-                    <Card title="Amortization Projections" subtitle="Real-time registry valuations">
-                       <div className="space-y-2 overflow-y-auto max-h-full pr-2">
-                         {assets.length === 0 ? (
-                           <div className="text-center py-20 bg-slate-50 rounded border border-dashed border-slate-300">
-                              <Database size={32} className="mx-auto text-slate-300 mb-4" />
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Awaiting Database Entry</p>
-                           </div>
-                         ) : (
-                           assets.map(a => {
-                             const curVal = calculateDepreciation(a);
-                             const percent = a.cost ? (curVal / a.cost) * 100 : 0;
-                             return (
-                               <div key={a.id} className="flex items-center gap-4 p-4 border border-slate-200 bg-white hover:bg-slate-50 transition-all cursor-pointer group" onClick={() => setSelectedAsset(a)}>
-                                 <div className="p-2 bg-slate-50 border border-slate-200 rounded text-slate-400 group-hover:text-blue-900 group-hover:bg-blue-50 transition-colors"><Laptop size={16} /></div>
+                    <Card title="Database Amortization" subtitle={`Live Fiscal Projections in ${sysCurrency.code}`} icon={BarChart3}>
+                       <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                          {assets.map(a => {
+                            const curVal = calculateDepreciation(a);
+                            const assetCurrency = CURRENCIES.find(c => c.code === (a.currency || 'INR'));
+                            const displayVal = (curVal / (assetCurrency?.rate || 1)) * sysCurrency.rate;
+                            const percent = Math.min(100, Math.max(0, a.cost > 0 ? (curVal / a.cost) * 100 : 0));
+                            return (
+                              <div key={a.id} className="flex items-center gap-4 p-4 border border-slate-200 bg-white hover:bg-slate-50 transition-all cursor-pointer group text-left shadow-sm rounded-md" onClick={() => setSelectedAsset(a)}>
+                                 <div className="p-2 bg-slate-50 border border-slate-200 rounded text-slate-400 group-hover:text-blue-900 transition-colors"><Laptop size={16} /></div>
                                  <div className="flex-1 min-w-0">
-                                   <div className="flex justify-between items-center mb-2">
+                                   <div className="flex justify-between items-center mb-2 leading-none text-left">
                                      <p className="text-xs font-black text-slate-800 uppercase truncate">{a.name}</p>
-                                     <p className="text-xs font-black text-slate-900 tabular-nums">${Math.round(curVal).toLocaleString()}</p>
+                                     <p className="text-xs font-black text-slate-900 tabular-nums font-mono tracking-tighter">{sysCurrency.symbol}{Math.round(displayVal).toLocaleString()}</p>
                                    </div>
-                                   <div className="h-2 w-full bg-slate-100 border border-slate-200 rounded-full overflow-hidden">
-                                     <div className={`h-full transition-all duration-1000 ${percent < 25 ? 'bg-rose-600' : 'bg-blue-900'}`} style={{ width: `${percent}%` }}></div>
+                                   <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                                     <div className={`h-full transition-all duration-1000 ${percent < 25 ? 'bg-rose-600' : 'bg-blue-600'}`} style={{ width: `${percent}%` }}></div>
                                    </div>
                                  </div>
                                </div>
                              );
-                           })
-                         )}
+                           })}
                        </div>
                     </Card>
                   </div>
-                  <div className="space-y-6 flex flex-col">
-                     <Card title="System Integrity" subtitle="Audit Compliance Overview">
-                        <div className="flex flex-col gap-6">
-                           <div className="flex items-center justify-between text-[10px] font-black text-slate-500 uppercase">
-                              <span>Registry Integrity</span>
-                              <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">CERTIFIED</span>
+                  <div className="space-y-6">
+                     <Card title="Security Status" subtitle="Cluster sync integrity">
+                        <div className="flex flex-col gap-6 text-left leading-none">
+                           <div className="flex items-center justify-between text-[10px] font-black text-slate-500 uppercase leading-none">
+                              <span>Registry Status</span>
+                              <span className={`font-black uppercase leading-none ${isLocalMode ? 'text-amber-600' : 'text-emerald-700'}`}>{isLocalMode ? 'LOCAL_ONLY' : 'Certified'}</span>
                            </div>
-                           <div className="p-4 bg-slate-900 rounded shadow-inner">
-                              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3">Resource Allocation</p>
-                              <div className="space-y-3">
-                                 <div className="flex items-center gap-3">
-                                    <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                                       <div className="h-full bg-blue-500" style={{ width: `${stats.utilization}%` }}></div>
-                                    </div>
-                                    <span className="text-[9px] font-black text-slate-300 w-8">{stats.utilization}%</span>
+                           <div className="p-5 bg-[#020617] rounded-lg shadow-inner text-left leading-none">
+                              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3 leading-none">System Load</p>
+                              <div className="flex items-center gap-3">
+                                 <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                    <div className="h-full bg-blue-500" style={{ width: '92%' }}></div>
                                  </div>
+                                 <span className="text-[9px] font-black text-blue-400 uppercase leading-none">Optimal</span>
                               </div>
                            </div>
-                        </div>
-                     </Card>
-                     
-                     <Card title="Rapid Tagging">
-                        <div className="grid grid-cols-2 gap-2">
-                           <button className="flex flex-col items-center justify-center py-4 border border-slate-200 bg-slate-50 hover:bg-slate-100 rounded transition-colors group">
-                              <Printer size={16} className="mb-2 text-slate-400 group-hover:text-blue-900" />
-                              <span className="text-[9px] font-black uppercase text-slate-500 group-hover:text-slate-800 tracking-tight">Thermal Print</span>
-                           </button>
-                           <button className="flex flex-col items-center justify-center py-4 border border-slate-200 bg-slate-50 hover:bg-slate-100 rounded transition-colors group">
-                              <Tag size={16} className="mb-2 text-slate-400 group-hover:text-blue-900" />
-                              <span className="text-[9px] font-black uppercase text-slate-500 group-hover:text-slate-800 tracking-tight">Bulk Update</span>
-                           </button>
                         </div>
                      </Card>
                   </div>
@@ -506,244 +629,387 @@ export default function App() {
           )}
 
           {activeTab === 'inventory' && (
-            <div className="space-y-4 animate-in">
-               <div className="flex items-center justify-between pb-3 border-b-2 border-slate-300">
-                  <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter flex items-center gap-3">
-                     <ランドマーク size={20} className="text-blue-900" />
-                     Master Hardware Registry
-                  </h2>
-                  <div className="flex gap-2">
-                     <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded text-[9px] font-black text-slate-600 uppercase hover:bg-slate-50">
-                        <Filter size={12} /> Registry Filter
-                     </button>
-                  </div>
-               </div>
-
-               <div className="bg-white border border-slate-300 rounded shadow-sm overflow-hidden">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead className="bg-slate-100 border-b-2 border-slate-300 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+            <div className="space-y-6 animate-in text-left">
+               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter border-b-2 border-slate-300 pb-3 flex justify-between items-center text-left leading-none">
+                  Registry Master Ledger
+                  <span className="text-[10px] font-black text-slate-400 tabular-nums uppercase leading-none tracking-widest">{assets.length} Entries Recorded</span>
+               </h2>
+               <div className="bg-white border border-slate-300 rounded-lg shadow-sm overflow-hidden text-left leading-none">
+                  <table className="w-full text-left text-xs border-collapse leading-none">
+                    <thead className="bg-slate-50 border-b border-slate-300 text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none text-left">
                        <tr>
-                         <th className="px-5 py-5 border-r border-slate-200">System Entry ID</th>
-                         <th className="px-5 py-5 border-r border-slate-200">Equipment Specifications</th>
-                         <th className="px-5 py-5 border-r border-slate-200">Personnel Assigned</th>
-                         <th className="px-5 py-5 border-r border-slate-200">Status</th>
-                         <th className="px-5 py-5 border-r border-slate-200">Valuation</th>
-                         <th className="px-5 py-5 text-right">Reference</th>
+                         <th className="px-6 py-5 border-r border-slate-200">Ref ID</th>
+                         <th className="px-6 py-5 border-r border-slate-200 text-left">Specs & Serial</th>
+                         <th className="px-6 py-5 border-r border-slate-200 text-left">Custodian</th>
+                         <th className="px-6 py-5 border-r border-slate-200 text-left">Registry Status</th>
+                         <th className="px-6 py-5 border-r border-slate-200 text-left">Current Value</th>
+                         <th className="px-6 py-5 text-right">Access</th>
                        </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-200 font-bold text-slate-700">
-                       {filteredAssets.length === 0 ? (
-                         <tr><td colSpan="6" className="px-5 py-20 text-center text-slate-400 uppercase tracking-widest text-[10px]">No records detected in central cluster</td></tr>
-                       ) : (
-                         filteredAssets.map(a => (
-                           <tr key={a.id} className="hover:bg-blue-50/50 transition-colors cursor-pointer" onClick={() => setSelectedAsset(a)}>
-                             <td className="px-5 py-4 border-r border-slate-100">
-                                <span className="font-mono text-[10px] text-blue-900">{a.id}</span>
-                             </td>
-                             <td className="px-5 py-4 border-r border-slate-100 uppercase tracking-tight">
-                                {a.name}
-                                <div className="text-[9px] text-slate-400 font-mono normal-case italic mt-1">S/N: {a.serial}</div>
-                             </td>
-                             <td className="px-5 py-4 border-r border-slate-100 uppercase tracking-tighter text-slate-500 text-[10px]">
-                                {a.user}
-                             </td>
-                             <td className="px-5 py-4 border-r border-slate-100">
-                                <Badge>{a.status}</Badge>
-                             </td>
-                             <td className="px-5 py-4 border-r border-slate-100 tabular-nums">
-                                ${Math.round(calculateDepreciation(a)).toLocaleString()}
-                             </td>
-                             <td className="px-5 py-4 text-right">
-                                <button className="text-blue-900 font-black hover:underline uppercase text-[9px] tracking-widest">Dossier</button>
-                             </td>
-                           </tr>
-                         ))
-                       )}
+                    <tbody className="divide-y divide-slate-200 font-bold text-slate-700 leading-none text-left">
+                       {filteredAssets.map(a => {
+                          const curVal = calculateDepreciation(a);
+                          const assetCurrency = CURRENCIES.find(c => c.code === (a.currency || 'INR'));
+                          const displayVal = (curVal / (assetCurrency?.rate || 1)) * sysCurrency.rate;
+                          return (
+                            <tr key={a.id} className="hover:bg-blue-50 transition-colors cursor-pointer text-left group leading-none" onClick={() => setSelectedAsset(a)}>
+                              <td className="px-6 py-4 border-r border-slate-100 leading-none text-left">
+                                 <span className="font-mono text-[10px] text-blue-900 italic leading-none font-bold">#{a.id.substring(0, 8)}</span>
+                              </td>
+                              <td className="px-6 py-4 border-r border-slate-100 uppercase font-black leading-none text-left">
+                                 <p className="group-hover:text-blue-900 transition-colors leading-none">{a.name}</p>
+                                 <div className="text-[9px] text-slate-400 font-mono normal-case italic mt-1 font-normal leading-none">S/N: {a.serial}</div>
+                              </td>
+                              <td className="px-6 py-4 border-r border-slate-100 uppercase text-[10px] text-slate-500 text-left leading-none">{a.user}</td>
+                              <td className="px-6 py-4 border-r border-slate-100 leading-none text-left"><Badge>{a.status}</Badge></td>
+                              <td className="px-6 py-4 border-r border-slate-100 tabular-nums font-black text-slate-900 text-sm leading-none text-left">
+                                {sysCurrency.symbol}{Math.round(displayVal).toLocaleString()}
+                              </td>
+                              <td className="px-6 py-4 text-right leading-none text-left font-black text-blue-900 uppercase text-[9px] hover:underline tracking-widest">Open Dossier</td>
+                            </tr>
+                          );
+                       })}
                     </tbody>
                   </table>
                </div>
             </div>
           )}
 
-          {activeTab === 'audits' && (
-            <div className="space-y-4 animate-in">
-               <h2 className="text-xl font-black text-slate-900 uppercase border-b-2 border-slate-300 pb-3">Master Audit Log</h2>
-               <div className="bg-white border border-slate-300 rounded shadow-sm overflow-hidden">
-                  <div className="divide-y divide-slate-200">
-                     {auditLog.length === 0 ? (
-                        <div className="p-20 text-center text-slate-400 uppercase font-black text-[10px] tracking-widest">Logs purged or unavailable</div>
-                     ) : (
-                        auditLog.map(log => (
-                          <div key={log.id} className="p-4 flex items-center justify-between text-xs hover:bg-slate-50">
-                             <div className="flex items-center gap-4">
-                                <div className="w-2 h-2 bg-blue-900 rounded-full"></div>
-                                <div>
-                                   <span className="font-black text-slate-900 uppercase tracking-tight">{log.action}</span>
-                                   {log.target && <span className="text-slate-400 ml-2 uppercase text-[10px]">({log.target})</span>}
+          {activeTab === 'procurement' && (
+            <div className="space-y-10 animate-in text-left">
+               <div className="flex items-center justify-between border-b-2 border-slate-200 pb-6">
+                  <div>
+                    <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">Purchase & Requisition</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mt-2">Generate Certified Documents in INR/Global Currencies</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsPOModalOpen(true)}
+                    className="bg-blue-900 hover:bg-blue-800 text-white px-8 py-3.5 rounded-xl text-xs font-black flex items-center gap-3 shadow-xl active:scale-95 transition-all uppercase tracking-widest leading-none"
+                  >
+                    <Plus size={18}/> Generate Requisition
+                  </button>
+               </div>
+
+               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  <div className="lg:col-span-2">
+                    <Card title="Acquisition Ledger" icon={Briefcase} subtitle="Official Multi-Currency Commitments">
+                       {purchaseOrders.length === 0 ? (
+                         <div className="p-20 text-center text-slate-300 border-2 border-dashed border-slate-100 rounded-2xl uppercase font-black tracking-widest text-[10px] leading-none">No active PO nodes in database</div>
+                       ) : (
+                         <div className="space-y-4">
+                           {purchaseOrders.map(po => (
+                             <div key={po.id} className="p-5 border border-slate-200 rounded-xl bg-white hover:border-blue-300 transition-all flex items-center justify-between group">
+                                <div className="flex items-center gap-5">
+                                   <div className="p-3 bg-slate-50 rounded-lg group-hover:bg-blue-50 transition-colors"><FileText size={20} className="text-slate-400 group-hover:text-blue-900" /></div>
+                                   <div>
+                                      <p className="text-sm font-black text-slate-900 uppercase">{po.poNumber}</p>
+                                      <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase">{po.vendor} • {po.item}</p>
+                                   </div>
+                                </div>
+                                <div className="flex items-center gap-6">
+                                   <div className="text-right">
+                                      <p className="text-sm font-black text-slate-900 tabular-nums">{po.symbol}{po.total.toLocaleString()} <span className="text-[9px] text-slate-400">{po.currency}</span></p>
+                                      <Badge>{po.status}</Badge>
+                                   </div>
+                                   <button 
+                                      onClick={() => handleDownloadPOPDF(po)}
+                                      className="flex items-center gap-2 p-2 px-3 text-[10px] font-black bg-slate-900 text-white rounded-lg transition-all active:scale-95 uppercase tracking-widest"
+                                   >
+                                      <Download size={14} /> PDF
+                                   </button>
                                 </div>
                              </div>
-                             <div className="text-right">
-                                <p className="font-bold text-slate-700">{log.user}</p>
-                                <p className="text-[9px] text-slate-400 tabular-nums">{new Date(log.timestamp).toLocaleString()}</p>
+                           ))}
+                         </div>
+                       )}
+                    </Card>
+                  </div>
+                  <div className="space-y-8 text-left">
+                    <Card title="Authorized Vendors" icon={Landmark} subtitle="Vetted Supply Chain Entities">
+                       <div className="space-y-3">
+                          {['Dell Gov India', 'Apple Corporate', 'Reliance Pro IT', 'Insight Global'].map(v => (
+                             <div key={v} className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center transition-all hover:bg-white hover:border-blue-900 cursor-default group">
+                                <span className="text-[11px] font-black text-slate-700 uppercase group-hover:text-blue-900 transition-colors">{v}</span>
+                                <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded uppercase">Vetted</span>
+                             </div>
+                          ))}
+                       </div>
+                    </Card>
+                  </div>
+               </div>
+            </div>
+          )}
+
+          {activeTab === 'reports' && (
+            <div className="space-y-10 animate-in text-left">
+              <div className="flex items-center justify-between border-b-2 border-slate-200 pb-6">
+                 <div>
+                    <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">Fiscal Reporting Engine</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mt-2">Generate Documentation in {sysCurrency.code}</p>
+                 </div>
+                 <div className="flex items-center gap-4 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
+                    <div className="flex items-center gap-2 px-3 border-r border-slate-100">
+                       <Calendar size={14} className="text-slate-400" />
+                       <input 
+                        type="date" 
+                        className="text-[10px] font-black uppercase outline-none" 
+                        value={reportDates.start} 
+                        onChange={e => setReportDates({...reportDates, start: e.target.value})}
+                       />
+                    </div>
+                    <div className="flex items-center gap-2 px-3">
+                       <span className="text-[10px] font-bold text-slate-300">TO</span>
+                       <input 
+                        type="date" 
+                        className="text-[10px] font-black uppercase outline-none" 
+                        value={reportDates.end} 
+                        onChange={e => setReportDates({...reportDates, end: e.target.value})}
+                       />
+                    </div>
+                    <button 
+                      onClick={handleGenerateReport}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2"
+                    >
+                      <Download size={14} /> Generate & Download
+                    </button>
+                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
+                 <div className="md:col-span-2 space-y-6">
+                    <Card title="Report Preview" icon={FileText} subtitle="Format compliant with Fiscal Form 12-B">
+                       <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 font-mono text-[10px] leading-relaxed text-slate-600 overflow-x-auto whitespace-pre">
+{`NEXUS ITAM CERTIFIED REPORT
+PERIOD: ${reportDates.start} TO ${reportDates.end}
+DISPLAY CURRENCY: ${sysCurrency.code} (${sysCurrency.symbol})
+---------------------------------------------------------
+ID       | NOMENCLATURE       | BOOK VALUE | PURCHASE DATE
+---------------------------------------------------------
+${assets.slice(0, 5).map(a => {
+  const curVal = calculateDepreciation(a);
+  const assetCurrency = CURRENCIES.find(c => c.code === (a.currency || 'INR'));
+  const displayVal = (curVal / (assetCurrency?.rate || 1)) * sysCurrency.rate;
+  return `${(a.id || '').padEnd(8)} | ${(a.name || '').padEnd(18)} | ${sysCurrency.symbol}${Math.round(displayVal).toString().padEnd(9)} | ${a.purchaseDate}`;
+}).join("\n")}
+... [CONTINUED IN DOWNLOAD]`}
+                       </div>
+                    </Card>
+                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'audits' && (
+            <div className="space-y-6 animate-in text-left">
+               <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter text-left border-b-2 border-slate-200 pb-6">System Security Audit</h2>
+               <div className="bg-white border border-slate-300 rounded-2xl shadow-sm overflow-hidden text-left">
+                  <div className="divide-y divide-slate-100">
+                     {auditLog.map(log => (
+                       <div key={log.id} className="p-6 flex items-center justify-between text-xs hover:bg-slate-50 transition-colors text-left leading-none">
+                          <div className="flex items-center gap-6 leading-none text-left">
+                             <div className="w-2.5 h-2.5 bg-blue-900 rounded-full shadow-[0_0_10px_rgba(30,58,138,0.5)]"></div>
+                             <div className="leading-none text-left">
+                                <span className="font-black text-slate-900 uppercase tracking-tight text-sm leading-none">{log.action}</span>
+                                {log.target && <span className="text-slate-400 ml-4 uppercase text-[10px] bg-slate-100 px-2 py-1 rounded leading-none">Target: {log.target}</span>}
                              </div>
                           </div>
-                        ))
-                     )}
+                          <div className="text-right leading-none">
+                             <p className="font-black text-slate-700 uppercase leading-none">{log.user}</p>
+                             <p className="text-[10px] text-slate-400 font-black mt-2 leading-none uppercase">{new Date(log.timestamp).toLocaleString()}</p>
+                          </div>
+                       </div>
+                     ))}
                   </div>
                </div>
             </div>
           )}
         </div>
 
-        {/* Global Slide-Over Panel */}
+        {/* Global Loading Overlay */}
+        {!isSystemReady && (
+          <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center">
+             <div className="w-16 h-16 border-4 border-blue-900 border-t-transparent rounded-full animate-spin mb-6"></div>
+             <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.5em] animate-pulse text-center leading-relaxed">
+                SYNCHRONIZING CONSOLIDATED<br/>ITAM REGISTRY CLUSTER...
+             </p>
+          </div>
+        )}
+        
+        {/* Detail Panel */}
         {selectedAsset && (
           <div className="absolute inset-0 z-[100] flex justify-end">
             <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedAsset(null)}></div>
-            <div className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col animate-in border-l-8 border-blue-900">
-               <div className="p-6 border-b-2 border-slate-200 flex items-center justify-between bg-slate-50">
-                  <div>
-                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-[0.2em] leading-none">Security Verification</h2>
-                    <p className="text-[10px] text-blue-900 font-bold mt-2">OBJECT_REF: {selectedAsset.id}</p>
+            <div className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col animate-in border-l-8 border-blue-900 text-left">
+               <div className="p-6 border-b-2 border-slate-200 flex items-center justify-between bg-slate-50 text-left leading-none">
+                  <div className="leading-none text-left">
+                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-tighter leading-none">Security Dossier</h2>
+                    <p className="text-[10px] text-blue-900 font-bold mt-2 uppercase tracking-tighter leading-none font-mono">REG_REF: {selectedAsset.id}</p>
                   </div>
-                  <button onClick={() => setSelectedAsset(null)} className="p-2 border border-slate-300 rounded bg-white text-slate-500 hover:text-slate-900 transition-colors shadow-sm">
-                     <X size={16} />
-                  </button>
+                  <button onClick={() => setSelectedAsset(null)} className="p-2 border border-slate-300 rounded bg-white text-slate-500 hover:text-slate-900 shadow-sm transition-all leading-none"><X size={16} /></button>
                </div>
-               
-               <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                  {/* Registry Tag Preview */}
-                  <div className="p-8 bg-white border border-slate-300 rounded shadow-inner flex flex-col items-center">
-                     <div className="w-full flex justify-between items-center mb-8 border-b border-slate-200 pb-3">
-                        <Landmark size={14} className="text-slate-400" />
-                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">Property of Government Division</span>
+               <div className="flex-1 overflow-y-auto p-8 space-y-8 uppercase text-left leading-none">
+                  <div className="p-8 bg-white border border-slate-300 rounded-3xl shadow-inner flex flex-col items-center text-center leading-none">
+                     <div className="w-full flex justify-between items-center mb-8 border-b border-slate-200 pb-3 leading-none text-left">
+                        <Landmark size={14} className="text-slate-400 leading-none" />
+                        <span className="text-[9px] font-black text-slate-400 tracking-[0.3em] leading-none uppercase">Official Registry</span>
                      </div>
-                     <div className="p-5 bg-slate-50 border-2 border-dashed border-slate-200 rounded-lg mb-6 flex flex-col items-center">
-                        <div className="flex gap-1 h-14 w-56 items-end">
-                           {[3,5,2,4,3,6,3,5,2,4,3,6,5,3,3].map((h, i) => (
-                             <div key={i} className="bg-slate-900" style={{ height: `${h * 16}%`, width: h % 2 === 0 ? '5px' : '2px' }}></div>
-                           ))}
-                        </div>
-                        <p className="text-[10px] font-black text-slate-900 mt-4 tracking-[0.4em]">{selectedAsset.id}</p>
-                     </div>
-                     <h3 className="text-md font-black text-slate-900 uppercase tracking-tighter text-center">{selectedAsset.name}</h3>
-                     <p className="text-[10px] font-bold text-slate-500 mt-1 uppercase bg-slate-100 px-2 py-0.5 rounded">MOD_ID: {selectedAsset.serial}</p>
+                     <h3 className="text-md font-black text-slate-900 tracking-tighter text-center leading-tight">{selectedAsset.name}</h3>
+                     <p className="text-[10px] font-bold text-slate-500 mt-2 bg-slate-100 px-2 py-1 rounded italic leading-none font-mono text-center">SERIAL: {selectedAsset.serial}</p>
                   </div>
 
-                  {/* Financial Ledger Section */}
-                  <div className="grid grid-cols-2 gap-px bg-slate-300 border border-slate-300 rounded overflow-hidden shadow-sm">
-                     <div className="p-5 bg-white text-center">
-                        <p className="text-[8px] font-black text-slate-400 uppercase mb-2">Registry Basis (Cost)</p>
-                        <p className="text-xl font-black text-slate-900">${selectedAsset.cost?.toLocaleString()}</p>
+                  <div className="grid grid-cols-2 gap-px bg-slate-300 border border-slate-300 rounded overflow-hidden shadow-md text-center text-left leading-none">
+                     <div className="p-5 bg-white text-left leading-none">
+                        <p className="text-[8px] font-black text-slate-400 uppercase mb-2 leading-none">Original Cost</p>
+                        <p className="text-xl font-black text-slate-900 tabular-nums leading-none font-mono">
+                           {CURRENCIES.find(c => c.code === (selectedAsset.currency || 'INR'))?.symbol}{selectedAsset.cost?.toLocaleString()}
+                        </p>
                      </div>
-                     <div className="p-5 bg-slate-50 text-center">
-                        <p className="text-[8px] font-black text-blue-400 uppercase mb-2">Fair Market Projection</p>
-                        <p className="text-xl font-black text-blue-900">${Math.round(calculateDepreciation(selectedAsset)).toLocaleString()}</p>
+                     <div className="p-5 bg-slate-50 text-left leading-none">
+                        <p className="text-[8px] font-black text-blue-400 uppercase mb-2 leading-none">Current Value</p>
+                        <p className="text-xl font-black text-blue-900 tabular-nums leading-none font-mono">
+                           {CURRENCIES.find(c => c.code === (selectedAsset.currency || 'INR'))?.symbol}{Math.round(calculateDepreciation(selectedAsset)).toLocaleString()}
+                        </p>
                      </div>
                   </div>
 
-                  {/* Administrative Metadata */}
-                  <div className="border border-slate-300 rounded overflow-hidden divide-y divide-slate-200">
-                     <div className="bg-slate-100 px-4 py-2 text-[9px] font-black text-slate-500 uppercase tracking-widest">Master Metadata</div>
+                  <div className="border border-slate-300 rounded-2xl overflow-hidden divide-y divide-slate-100 font-black text-left leading-none">
                      {[
-                       { l: 'Assigned Custodian', v: selectedAsset.user },
-                       { l: 'Authorized Supplier', v: selectedAsset.vendor },
+                       { l: 'Assigned User', v: selectedAsset.user },
+                       { l: 'Authorized Vendor', v: selectedAsset.vendor || 'Approved Entity' },
                        { l: 'Certification Date', v: selectedAsset.purchaseDate },
-                       { l: 'Amortization Term', v: `${selectedAsset.usefulLife} Fiscal Years` },
+                       { l: 'Purchase Currency', v: selectedAsset.currency || 'INR' },
+                       { l: 'Fiscal Life Period', v: `${selectedAsset.usefulLife} Years` },
                      ].map((row, i) => (
-                       <div key={i} className="flex justify-between p-3.5 text-[10px] bg-white uppercase font-black">
-                          <span className="text-slate-400">{row.l}</span>
-                          <span className="text-slate-800">{row.v}</span>
+                       <div key={i} className="flex justify-between p-3.5 text-[10px] bg-white transition-colors leading-none uppercase text-left">
+                          <span className="text-slate-400 uppercase tracking-widest leading-none">{row.l}</span>
+                          <span className="text-slate-800 uppercase text-right text-left leading-none font-black">{row.v}</span>
                        </div>
                      ))}
                   </div>
-
-                  <div className="bg-blue-50 border border-blue-100 p-4 rounded text-[10px] font-bold text-blue-800 flex items-start gap-3 italic leading-relaxed">
-                     <Shield size={16} className="shrink-0 text-blue-900" />
-                     <span>Record Certification: This asset dossier is verified for current fiscal period. Modifications require Chief Asset Officer authorization.</span>
-                  </div>
                </div>
 
-               <div className="p-8 border-t-2 border-slate-200 grid grid-cols-2 gap-2 bg-slate-50 shrink-0">
-                  <button className="flex items-center justify-center gap-2 py-3 bg-white border border-slate-300 rounded text-[10px] font-black text-slate-700 hover:bg-slate-100 uppercase tracking-widest transition-all">
-                    <Printer size={14} /> Formal Print
+               <div className="p-8 border-t-2 border-slate-200 grid grid-cols-2 gap-2 bg-slate-50 shrink-0 leading-none">
+                  <button onClick={() => handleVerifyAsset(selectedAsset)} className="flex items-center justify-center gap-3 py-4 bg-emerald-600 text-white rounded-md text-[10px] font-black hover:bg-emerald-700 transition-all uppercase tracking-widest shadow-sm active:scale-95 leading-none">
+                    <CheckCircle2 size={16} /> Execute Audit
                   </button>
-                  <button onClick={() => deleteAsset(selectedAsset.id)} className="flex items-center justify-center gap-2 py-3 bg-white border border-slate-300 rounded text-[10px] font-black text-rose-700 hover:bg-rose-50 transition-all uppercase tracking-widest">
-                    <Trash2 size={14} /> Purge Record
-                  </button>
-                  <button onClick={() => setSelectedAsset(null)} className="col-span-2 py-4 bg-blue-900 text-white rounded text-xs font-black hover:bg-blue-800 transition-all uppercase tracking-[0.2em] shadow-lg shadow-blue-900/20">
-                    Exit Dossier
+                  <button onClick={() => deleteAsset(selectedAsset.id)} className="flex items-center justify-center gap-3 py-4 bg-white border border-slate-300 rounded-md text-[10px] font-black text-rose-700 hover:bg-rose-50 transition-all uppercase tracking-widest active:scale-95 leading-none shadow-sm">
+                    <Trash2 size={14} /> Purge record
                   </button>
                </div>
             </div>
           </div>
         )}
 
-        {/* Global Modal System */}
+        {/* Modal: Registry Certification (Asset Add) */}
         {isAddModalOpen && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-sm">
-            <div className="bg-white rounded border-t-8 border-blue-900 w-full max-w-xl shadow-2xl overflow-hidden animate-in">
-               <div className="p-8 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-                  <div>
-                    <h2 className="text-xl font-black text-slate-900 tracking-tighter uppercase leading-none">Asset Certification</h2>
-                    <p className="text-[10px] text-slate-500 font-bold mt-2 uppercase tracking-wider">Division Form 12-A • Registration Sub-System</p>
-                  </div>
-                  <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-900"><X size={20} /></button>
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-sm text-left">
+            <div className="bg-white rounded border-t-8 border-blue-900 w-full max-w-xl shadow-2xl overflow-hidden animate-in text-left">
+               <div className="p-8 border-b border-slate-200 flex items-center justify-between bg-slate-50 text-left leading-none">
+                  <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter leading-none">Registry Certification</h2>
+                  <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-900 transition-colors leading-none"><X size={20} /></button>
                </div>
                
-               <form onSubmit={handleAddAsset} className="p-8 space-y-6">
-                  <div className="grid grid-cols-2 gap-6">
-                     <div className="col-span-2">
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Hardware Nomenclature</label>
-                        <input name="name" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black focus:bg-white outline-none" placeholder="e.g. SERVER_NODE_01" />
+               <form onSubmit={handleAddAsset} className="p-8 space-y-6 text-left leading-none">
+                  <div className="grid grid-cols-2 gap-6 uppercase text-left leading-none">
+                     <div className="col-span-2 text-left leading-none">
+                        <label className="block text-[10px] font-black text-slate-500 mb-2 tracking-widest leading-none">Hardware Nomenclature</label>
+                        <input name="name" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none focus:bg-white transition-all uppercase placeholder:italic leading-none" placeholder="e.g. INFRA_NODE_01" />
                      </div>
-                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Unique Identifier (S/N)</label>
-                        <input name="serial" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black focus:bg-white outline-none" />
+                     <div className="text-left leading-none">
+                        <label className="block text-[10px] font-black text-slate-500 mb-2 tracking-widest leading-none">Identifier (S/N)</label>
+                        <input name="serial" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none transition-all leading-none" />
                      </div>
-                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Classification</label>
-                        <select name="type" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none uppercase">
+                     <div className="text-left leading-none">
+                        <label className="block text-[10px] font-black text-slate-500 mb-2 tracking-widest leading-none text-left">Category</label>
+                        <select name="type" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none uppercase transition-all">
                            <option>Standard Workstation</option>
-                           <option>Portable Computing Device</option>
-                           <option>Server Cluster Node</option>
+                           <option>Infrastructure Server</option>
                            <option>Networking Equipment</option>
                         </select>
                      </div>
-                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Gross Acquisition Cost ($)</label>
-                        <input name="cost" type="number" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
+                     <div className="text-left leading-none">
+                        <label className="block text-[10px] font-black text-slate-500 mb-2 tracking-widest leading-none text-left">Purchase Cost</label>
+                        <input name="cost" type="number" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none transition-all" />
                      </div>
-                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Fiscal Life (Years)</label>
-                        <input name="life" type="number" defaultValue="4" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
+                     <div className="text-left leading-none">
+                        <label className="block text-[10px] font-black text-slate-500 mb-2 tracking-widest leading-none text-left">Purchase Currency</label>
+                        <select name="currency" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none uppercase transition-all">
+                           {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                        </select>
                      </div>
-                     <div className="col-span-2">
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Vendor / Authorized Provider</label>
-                        <input name="vendor" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none uppercase" placeholder="e.g. DELL GOVERNMENT SALES" />
+                     <div className="text-left leading-none">
+                        <label className="block text-[10px] font-black text-slate-500 mb-2 tracking-widest leading-none text-left">Service Life (Y)</label>
+                        <input name="life" type="number" defaultValue="4" className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none transition-all" />
                      </div>
-                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Acquisition Date</label>
-                        <input name="date" type="date" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
-                     </div>
-                     <div>
-                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Warranty Threshold</label>
-                        <input name="warranty" type="date" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none" />
+                     <div className="col-span-2 text-left leading-none">
+                        <label className="block text-[10px] font-black text-slate-500 mb-2 tracking-widest leading-none text-left">Certification Date</label>
+                        <input name="date" type="date" required className="w-full bg-slate-50 border border-slate-300 rounded px-4 py-3 text-xs font-black outline-none transition-all" />
                      </div>
                   </div>
 
-                  <div className="flex gap-4 pt-8 border-t border-slate-100">
-                     <button type="button" onClick={() => setIsAddModalOpen(false)} className="flex-1 py-4 text-[10px] font-black text-slate-500 bg-slate-100 rounded border border-slate-300 uppercase tracking-widest hover:bg-slate-200 transition-colors">Abort Entry</button>
-                     <button type="submit" className="flex-1 py-4 bg-blue-900 text-white rounded text-[10px] font-black hover:bg-blue-800 uppercase tracking-widest shadow-xl shadow-blue-900/20 active:scale-95 transition-all">Commit to Master Registry</button>
+                  <div className="flex gap-4 pt-8 border-t border-slate-100 leading-none">
+                     <button type="button" onClick={() => setIsAddModalOpen(false)} className="flex-1 py-4 text-[10px] font-black text-slate-500 bg-slate-100 rounded border border-slate-300 uppercase tracking-[0.2em] transition-all hover:bg-slate-200 leading-none">Abort Certification</button>
+                     <button type="submit" className="flex-1 py-4 bg-blue-900 text-white rounded text-[10px] font-black hover:bg-blue-800 uppercase tracking-[0.2em] shadow-xl shadow-blue-900/20 transition-all active:scale-95 leading-none">Execute registration</button>
                   </div>
                </form>
             </div>
           </div>
         )}
 
-        {loading && isLoggedIn && (
-          <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center">
-             <div className="w-16 h-16 border-4 border-blue-900 border-t-transparent rounded-full animate-spin mb-6"></div>
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.5em] animate-pulse">Synchronizing Cloud Cluster...</p>
+        {/* Modal: Purchase Requisition Generation (Multi-Currency Support) */}
+        {isPOModalOpen && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-8 bg-slate-900/90 backdrop-blur-xl text-left">
+            <div className="bg-white rounded-3xl border-t-[12px] border-blue-900 w-full max-w-2xl shadow-2xl overflow-hidden animate-in text-left">
+               <div className="p-10 border-b border-slate-200 flex items-center justify-between bg-slate-50/50 text-left leading-none">
+                  <div>
+                     <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tighter">Purchase Requisition</h2>
+                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mt-3">Fiscal Acquisition Form 14-C • INR Standard Default</p>
+                  </div>
+                  <button onClick={() => setIsPOModalOpen(false)} className="text-slate-400 hover:text-slate-900 transition-colors leading-none"><X size={24} /></button>
+               </div>
+               
+               <form onSubmit={handleCreatePO} className="p-10 space-y-8 text-left leading-none">
+                  <div className="grid grid-cols-2 gap-8 uppercase text-left leading-none">
+                     <div className="col-span-2 text-left leading-none">
+                        <label className="block text-[11px] font-black text-slate-500 mb-3 tracking-widest leading-none">Hardware Nomenclature / Specification</label>
+                        <input name="item" required className="w-full bg-slate-100 border border-slate-200 rounded-xl px-5 py-4 text-sm font-black outline-none focus:bg-white focus:border-blue-900 transition-all uppercase placeholder:italic leading-none" placeholder="e.g. HIGH-PERFORMANCE CLUSTER NODE X" />
+                     </div>
+                     <div className="text-left leading-none">
+                        <label className="block text-[11px] font-black text-slate-500 mb-3 tracking-widest leading-none text-left">Authorized Vendor</label>
+                        <select name="vendor" className="w-full bg-slate-100 border border-slate-200 rounded-xl px-5 py-4 text-sm font-black outline-none uppercase transition-all focus:bg-white leading-none">
+                           <option>Dell Gov India</option>
+                           <option>Apple Public Sector</option>
+                           <option>Reliance Pro IT</option>
+                           <option>Insight Global</option>
+                        </select>
+                     </div>
+                     <div className="text-left leading-none">
+                        <label className="block text-[11px] font-black text-slate-500 mb-3 tracking-widest leading-none text-left">Operating Currency</label>
+                        <div className="relative">
+                          <Coins className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                          <select name="currency" className="w-full bg-slate-100 border border-slate-200 rounded-xl py-4 pl-12 pr-4 text-sm font-black outline-none uppercase transition-all focus:bg-white leading-none">
+                             {CURRENCIES.map(c => (
+                               <option key={c.code} value={c.code}>{c.label}</option>
+                             ))}
+                          </select>
+                        </div>
+                     </div>
+                     <div className="text-left leading-none">
+                        <label className="block text-[11px] font-black text-slate-500 mb-3 tracking-widest leading-none text-left">Unit Count (Qty)</label>
+                        <input name="qty" type="number" required defaultValue="1" className="w-full bg-slate-100 border border-slate-200 rounded-xl px-5 py-4 text-sm font-black outline-none focus:bg-white focus:border-blue-900 transition-all leading-none font-mono" />
+                     </div>
+                     <div className="text-left leading-none">
+                        <label className="block text-[11px] font-black text-slate-500 mb-3 tracking-widest leading-none text-left">Unit Cost Basis</label>
+                        <input name="price" type="number" required placeholder="0.00" className="w-full bg-slate-100 border border-slate-200 rounded-xl px-5 py-4 text-sm font-black outline-none focus:bg-white focus:border-blue-900 transition-all leading-none font-mono" />
+                     </div>
+                  </div>
+
+                  <div className="flex gap-6 pt-10 border-t border-slate-100 leading-none">
+                     <button type="button" onClick={() => setIsPOModalOpen(false)} className="flex-1 py-5 text-[11px] font-black text-slate-500 bg-slate-100 rounded-xl border border-slate-200 uppercase tracking-[0.3em] transition-all hover:bg-slate-200 leading-none active:scale-95">Abort Requisition</button>
+                     <button type="submit" className="flex-1 py-5 bg-blue-900 text-white rounded-xl text-[11px] font-black hover:bg-blue-800 uppercase tracking-[0.3em] shadow-2xl shadow-blue-900/40 transition-all active:scale-95 leading-none">Generate Requisition</button>
+                  </div>
+               </form>
+            </div>
           </div>
         )}
       </main>
@@ -751,4 +1017,4 @@ export default function App() {
   );
 }
 
-const ランドマーク = Landmark; // Unicode bypass for gov icon
+const ランドマーク = Landmark;
